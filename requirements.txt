@@ -1,3 +1,4 @@
-streamlit
-pandas
-pydeck
+streamlit==1.47.0
+pydeck==0.9.1
+pandas==2.3.1
+geopy==2.4.1

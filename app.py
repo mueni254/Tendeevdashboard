@@ -1,89 +1,71 @@
 import streamlit as st
-import math
 import pandas as pd
 import pydeck as pdk
+from geopy.geocoders import Nominatim
 
-# -----------------------------
-# Replace with your Mapbox API token
-MAPBOX_API_TOKEN = "YOUR_MAPBOX_ACCESS_TOKEN"
-# -----------------------------
+# Set page title
+st.set_page_config(page_title="EV Charging Map", layout="wide")
 
-st.set_page_config(page_title="Nearest EV Charging Station", layout="centered")
+# Load Mapbox key from secrets
+pdk.settings.mapbox_api_key = st.secrets["mapbox"]["api_key"]
 
-st.title("🔌 Nearest EV Charging Station Finder")
+# Sample EV charging stations data
+stations_data = pd.DataFrame([
+    {"name": "EV Station Nairobi", "lat": -1.2921, "lon": 36.8219},
+    {"name": "EV Station Mombasa", "lat": -4.0435, "lon": 39.6682},
+    {"name": "EV Station Kisumu", "lat": -0.0917, "lon": 34.7679},
+])
 
-# Hardcoded charging station data (Name, Latitude, Longitude)
-charging_stations = [
-    {"name": "Station A - City Center", "lat": -1.286389, "lon": 36.817223},
-    {"name": "Station B - Westlands", "lat": -1.2683, "lon": 36.8000},
-    {"name": "Station C - Karen", "lat": -1.3200, "lon": 36.7200},
-    {"name": "Station D - Thika Road", "lat": -1.2400, "lon": 36.9000},
-]
+# Title
+st.title("🔋 EV Charging Station Finder (Kenya)")
 
-# Haversine formula to calculate distance between two coordinates
-def haversine(lat1, lon1, lat2, lon2):
-    R = 6371  # Earth radius in km
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    d_phi = math.radians(lat2 - lat1)
-    d_lambda = math.radians(lon2 - lon1)
+# User input
+location_input = st.text_input("Enter your location (e.g., Nairobi, Mombasa)")
 
-    a = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+if location_input:
+    with st.spinner("Searching location..."):
+        geolocator = Nominatim(user_agent="ev_locator")
+        location = geolocator.geocode(location_input)
 
-    return R * c  # in kilometers
+        if location:
+            user_lat = location.latitude
+            user_lon = location.longitude
 
-# User input for current location
-st.subheader("📍 Enter Your Current Location")
-lat = st.number_input("Latitude", format="%.6f", value=-1.286389)
-lon = st.number_input("Longitude", format="%.6f", value=36.817223)
+            # Find nearest station
+            stations_data["distance"] = ((stations_data["lat"] - user_lat)**2 + (stations_data["lon"] - user_lon)**2)**0.5
+            nearest_station = stations_data.loc[stations_data["distance"].idxmin()]
 
-# Compute nearest station
-def find_nearest_station(user_lat, user_lon):
-    nearest = None
-    min_distance = float("inf")
+            st.success(f"Nearest station: {nearest_station['name']}")
 
-    for station in charging_stations:
-        dist = haversine(user_lat, user_lon, station["lat"], station["lon"])
-        if dist < min_distance:
-            min_distance = dist
-            nearest = station.copy()
-            nearest["distance_km"] = round(dist, 2)
-
-    return nearest
-
-if st.button("Find Nearest Station"):
-    nearest = find_nearest_station(lat, lon)
-
-    st.success(f"✅ Nearest Station: **{nearest['name']}**")
-    st.write(f"📏 Distance: {nearest['distance_km']} km")
-
-    # Optional: Show map
-    st.subheader("🗺️ Map View")
-
-    # Map data
-    map_df = pd.DataFrame([
-        {"name": "Your Location", "lat": lat, "lon": lon},
-        {"name": nearest["name"], "lat": nearest["lat"], "lon": nearest["lon"]}
-    ])
-
-    st.pydeck_chart(pdk.Deck(
-        map_style='mapbox://styles/mapbox/streets-v11',
-        initial_view_state=pdk.ViewState(
-            latitude=lat,
-            longitude=lon,
-            zoom=11,
-            pitch=50,
-        ),
-        layers=[
-            pdk.Layer(
-                'ScatterplotLayer',
-                data=map_df,
+            # Plot on map
+            layer = pdk.Layer(
+                "ScatterplotLayer",
+                data=pd.DataFrame([
+                    {"name": "You", "lat": user_lat, "lon": user_lon},
+                    {"name": nearest_station["name"], "lat": nearest_station["lat"], "lon": nearest_station["lon"]},
+                ]),
                 get_position='[lon, lat]',
-                get_color='[200, 30, 0, 160]',
-                get_radius=400,
-                pickable=True
+                get_color='[0, 150, 255, 160]',
+                get_radius=30000,
             )
-        ],
-        tooltip={"text": "{name}"},
-        mapbox_key=MAPBOX_API_TOKEN
-    ))
+
+            view_state = pdk.ViewState(
+                latitude=user_lat,
+                longitude=user_lon,
+                zoom=6,
+                pitch=0,
+            )
+
+            st.pydeck_chart(pdk.Deck(
+                map_style='mapbox://styles/mapbox/streets-v11',
+                initial_view_state=view_state,
+                layers=[layer],
+                tooltip={"text": "{name}"}
+            ))
+
+        else:
+            st.error("Location not found. Please try a more specific name.")
+else:
+    st.info("Enter your location to find the nearest EV charging station.")
+
+
