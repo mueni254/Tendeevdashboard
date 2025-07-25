@@ -6,7 +6,7 @@ import math
 # Mapbox API Key from secrets
 MAPBOX_API_KEY = st.secrets["mapbox"]["api_key"]
 
-# Session state setup
+# Initialize session state variables if not present
 if "registered_users" not in st.session_state:
     st.session_state.registered_users = {}
 
@@ -28,35 +28,40 @@ Empower your electric driving experience with real-time insights, intelligent an
 - ⚙️ Proactive Maintenance: Stay ahead with alerts and diagnostics tailored to your EV.
 
 ---
+
 **Drive Smarter. Charge Smarter.**  
 Log in now to take full command of your electric journey.
 """)
 
     option = st.radio("Select an option", ["Log In", "Register"])
 
-    email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
+    with st.form("auth_form"):
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Submit")
 
-    if option == "Register":
-        if st.button("Register"):
-            if email and password:
-                st.session_state.registered_users[email] = password
-                st.success("✅ Registration successful! You can now log in.")
-            else:
-                st.error("Please provide both email and password.")
+        if submitted:
+            if option == "Register":
+                if email and password:
+                    if email in st.session_state.registered_users:
+                        st.warning("This email is already registered. Please log in.")
+                    else:
+                        st.session_state.registered_users[email] = password
+                        st.success("✅ Registration successful! You can now log in.")
+                else:
+                    st.error("Please provide both email and password.")
 
-    if option == "Log In":
-        if st.button("Log In"):
-            if st.session_state.registered_users.get(email) == password:
-                st.session_state.authenticated = True
-                st.session_state.email = email
-                st.success(f"✅ Welcome back, {email}!")
-                st.experimental_rerun()
-            else:
-                st.error("Invalid email or password.")
+            elif option == "Log In":
+                if st.session_state.registered_users.get(email) == password:
+                    st.session_state.authenticated = True
+                    st.session_state.email = email
+                    st.success(f"✅ Welcome back, {email}!")
+                    st.experimental_rerun()
+                else:
+                    st.error("Invalid email or password.")
 
 def calculate_range(vehicle_type, engine_cc, battery_kwh, charge_percent):
-    # Example simple logic:
+    # Basic example logic for range estimation:
     base_efficiency = 5  # km per kWh base, adjust per vehicle_type
     if vehicle_type.lower() == "car":
         efficiency_factor = 1.0
@@ -87,7 +92,7 @@ def haversine(lat1, lon1, lat2, lon2):
 
 def find_nearby_charging_stations(lat, lon, max_results=3):
     # Mapbox POI search API endpoint
-    url = f"https://api.mapbox.com/geocoding/v5/mapbox.places/charging%20station.json"
+    url = "https://api.mapbox.com/geocoding/v5/mapbox.places/charging%20station.json"
     params = {
         "proximity": f"{lon},{lat}",
         "limit": 10,
@@ -95,8 +100,13 @@ def find_nearby_charging_stations(lat, lon, max_results=3):
         "types": "poi"
     }
 
-    response = requests.get(url, params=params)
-    data = response.json()
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        st.error(f"Error fetching charging stations: {e}")
+        return []
 
     stations = []
     if "features" in data:
@@ -152,7 +162,6 @@ def main_app():
                         st.write(f"- **{s['name']}** ({s['distance_km']:.2f} km away) at (Lat: {s['lat']:.4f}, Lon: {s['lon']:.4f})")
                 else:
                     st.info("No charging stations found nearby.")
-
             else:
                 st.warning("📍 Location not found. Please try a more specific address.")
         except Exception as e:
@@ -168,11 +177,6 @@ def run_app():
     else:
         show_welcome()
 
-run_app()
-
-
-
-
-
-
+if __name__ == "__main__":
+    run_app()
 
