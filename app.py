@@ -1,181 +1,154 @@
 import streamlit as st
 import requests
-from geopy.geocoders import Nominatim
 import math
 
-# Mapbox API Key from secrets
+# Load Mapbox API key
 MAPBOX_API_KEY = st.secrets["mapbox"]["api_key"]
 
-# Initialize session state variables if not present
-if "registered_users" not in st.session_state:
-    st.session_state.registered_users = {}
-
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
-if "email" not in st.session_state:
-    st.session_state.email = ""
-
-def show_welcome():
-    st.markdown("# 🚗 Welcome to Twende EV")
-    st.markdown("### Powering the Future of Mobility – One Charge at a Time")
-    st.write("""
-Empower your electric driving experience with real-time insights, intelligent analytics, and seamless control.
-
-**Key Benefits**  
-- 🔋 Smart Charging: No more guesswork—get precise, data-driven charging recommendations.  
-- 🗺️ Journey Confidence: Plan routes with real-time battery and station insights.  
-- ⚙️ Proactive Maintenance: Stay ahead with alerts and diagnostics tailored to your EV.
-
----
-
-**Drive Smarter. Charge Smarter.**  
-Log in now to take full command of your electric journey.
-""")
-
-    option = st.radio("Select an option", ["Log In", "Register"])
-
-    with st.form("auth_form"):
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Submit")
-
-        if submitted:
-            if option == "Register":
-                if email and password:
-                    if email in st.session_state.registered_users:
-                        st.warning("This email is already registered. Please log in.")
-                    else:
-                        st.session_state.registered_users[email] = password
-                        st.success("✅ Registration successful! You can now log in.")
-                else:
-                    st.error("Please provide both email and password.")
-
-            elif option == "Log In":
-                if st.session_state.registered_users.get(email) == password:
-                    st.session_state.authenticated = True
-                    st.session_state.email = email
-                    st.success(f"✅ Welcome back, {email}!")
-                    st.experimental_rerun()
-                else:
-                    st.error("Invalid email or password.")
-
-def calculate_range(vehicle_type, engine_cc, battery_kwh, charge_percent):
-    # Basic example logic for range estimation:
-    base_efficiency = 5  # km per kWh base, adjust per vehicle_type
-    if vehicle_type.lower() == "car":
-        efficiency_factor = 1.0
-    elif vehicle_type.lower() == "motorbike":
-        efficiency_factor = 1.5  # more efficient
-    else:
-        efficiency_factor = 1.0  # default
-
-    # Adjust by engine_cc roughly (less cc = better efficiency)
-    if engine_cc < 100:
-        efficiency_factor *= 1.3
-    elif engine_cc > 1500:
-        efficiency_factor *= 0.7
-
-    estimated_km = battery_kwh * (charge_percent / 100) * base_efficiency * efficiency_factor
-    return round(estimated_km, 1)
-
-def haversine(lat1, lon1, lat2, lon2):
-    # Calculate distance in km between two points
-    R = 6371  # Earth radius km
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
-
-def find_nearby_charging_stations(lat, lon, max_results=3):
-    # Mapbox POI search API endpoint
-    url = "https://api.mapbox.com/geocoding/v5/mapbox.places/charging%20station.json"
-    params = {
-        "proximity": f"{lon},{lat}",
-        "limit": 10,
-        "access_token": MAPBOX_API_KEY,
-        "types": "poi"
-    }
-
+# Helper: Get coordinates for a place name
+def get_coordinates(place_name):
     try:
+        url = f"https://api.mapbox.com/geocoding/v5/mapbox.places/{place_name}.json"
+        params = {
+            "access_token": MAPBOX_API_KEY,
+            "limit": 1
+        }
         response = requests.get(url, params=params)
         response.raise_for_status()
         data = response.json()
+        coords = data["features"][0]["center"]
+        lon, lat = coords[0], coords[1]
+        return lat, lon
     except Exception as e:
-        st.error(f"Error fetching charging stations: {e}")
-        return []
+        st.warning(f"Could not resolve location '{place_name}'. Error: {e}")
+        return None, None
 
-    stations = []
-    if "features" in data:
+# Helper: Get nearby charging stations
+def get_nearest_charging_stations(lat, lon):
+    try:
+        url = "https://api.mapbox.com/geocoding/v5/mapbox.places/charging station.json"
+        params = {
+            "proximity": f"{lon},{lat}",
+            "access_token": MAPBOX_API_KEY,
+            "types": "poi",
+            "limit": 10
+        }
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+
+        if not data.get("features"):
+            return []
+
+        stations = []
         for feature in data["features"]:
             name = feature.get("text", "Unknown")
-            coords = feature.get("geometry", {}).get("coordinates", [None, None])
-            if coords[1] is not None and coords[0] is not None:
-                distance = haversine(lat, lon, coords[1], coords[0])
+            address = feature.get("place_name", "No address")
+            coords = feature.get("center", [])
+            if coords:
                 stations.append({
                     "name": name,
-                    "lat": coords[1],
-                    "lon": coords[0],
-                    "distance_km": distance
+                    "address": address,
+                    "latitude": coords[1],
+                    "longitude": coords[0]
                 })
 
-    # Sort by distance and return top N
-    stations_sorted = sorted(stations, key=lambda x: x["distance_km"])
-    return stations_sorted[:max_results]
+        return stations
+    except Exception as e:
+        st.error(f"Error retrieving stations: {e}")
+        return []
 
-def main_app():
-    st.markdown(f"### 👋 Hello, {st.session_state.email}")
-    st.title("Twende EV Charging & Range Assistant")
+# Feature: Battery range estimation
+def estimate_range(vehicle_type, vehicle_cc, battery_cc, percent_charge):
+    try:
+        battery_efficiency = int(battery_cc) / int(vehicle_cc)
+        usable_capacity = (int(percent_charge) / 100.0) * int(battery_cc)
+        range_km = usable_capacity * battery_efficiency * 0.5  # Example formula
+        return round(range_km, 2)
+    except:
+        return None
 
-    with st.form("range_form"):
-        st.header("Calculate Your EV Range")
-        vehicle_type = st.selectbox("Vehicle Type", ["Car", "Motorbike", "Other"])
-        engine_cc = st.number_input("Engine CC", min_value=50, max_value=5000, value=1500, step=10)
-        battery_kwh = st.number_input("Battery Capacity (kWh)", min_value=1.0, max_value=200.0, value=40.0, step=0.5)
-        charge_percent = st.slider("Current Battery Charge (%)", 0, 100, 75)
-        submitted = st.form_submit_button("Calculate Range")
+# UI Section: Welcome and Login
+def show_welcome():
+    st.title("Welcome to Twende EV")
+    st.subheader("Powering the Future of Mobility – One Charge at a Time")
 
-        if submitted:
-            est_range = calculate_range(vehicle_type, engine_cc, battery_kwh, charge_percent)
-            st.success(f"Estimated driving range: **{est_range} km**")
+    st.markdown("""
+    Empower your electric driving experience with real-time insights, intelligent analytics, and seamless control.  
+    **Twende EV** is designed to eliminate range anxiety, optimize charging efficiency, and keep your EV performing at its best — so you can focus on the road ahead.
 
-    st.markdown("---")
-    st.header("Find Nearby Charging Stations")
+    #### Key Benefits:
+    - 🚗 **Smart Charging:** No more guesswork—get precise, data-driven charging recommendations.  
+    - 🗺️ **Journey Confidence:** Plan routes with real-time battery and station insights.  
+    - 🛠️ **Proactive Maintenance:** Stay ahead with alerts and diagnostics tailored to your EV.  
 
-    location_input = st.text_input("Enter your current location (e.g., Nairobi CBD):")
+    **Drive Smarter. Charge Smarter.**  
+    **Log in now** to take full command of your electric journey.  
+    """)
 
-    if location_input:
-        try:
-            geolocator = Nominatim(user_agent="ev_locator")
-            location = geolocator.geocode(location_input)
-            if location:
-                lat, lon = location.latitude, location.longitude
+    st.info("🚀 Ready to redefine your EV experience?")
+    if st.button("Get Started"):
+        st.session_state.logged_in = False  # Allow user to go to login
 
-                stations = find_nearby_charging_stations(lat, lon)
+# UI Section: Login page
+def login_page():
+    st.title("🔐 Login")
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
 
+    if st.button("Login"):
+        if email and password:
+            st.session_state.logged_in = True
+            st.experimental_rerun()
+        else:
+            st.warning("Please enter both email and password.")
+
+# UI Section: Main dashboard
+def main_dashboard():
+    st.title("🔋 Twende EV Dashboard")
+
+    st.subheader("🔍 Search Nearby Charging Stations")
+    place_input = st.text_input("Enter your location (e.g., Langata)")
+
+    if st.button("Search"):
+        if place_input:
+            lat, lon = get_coordinates(place_input)
+            st.write(f"📍 Coordinates for {place_input}: {lat}, {lon}")
+            if lat and lon:
+                stations = get_nearest_charging_stations(lat, lon)
                 if stations:
-                    st.write(f"### Charging stations near {location_input}:")
+                    st.success(f"Found {len(stations)} nearby station(s):")
                     for s in stations:
-                        st.write(f"- **{s['name']}** ({s['distance_km']:.2f} km away) at (Lat: {s['lat']:.4f}, Lon: {s['lon']:.4f})")
+                        st.markdown(f"**{s['name']}** - {s['address']}")
                 else:
-                    st.info("No charging stations found nearby.")
+                    st.warning("⚠️ No charging stations found nearby.")
             else:
-                st.warning("📍 Location not found. Please try a more specific address.")
-        except Exception as e:
-            st.error(f"Error: {e}")
+                st.warning("Could not resolve the location.")
+        else:
+            st.warning("Please enter a location.")
 
-    if st.button("🔒 Log out"):
-        st.session_state.authenticated = False
-        st.experimental_rerun()
+    st.divider()
+    st.subheader("⚡ Estimate Battery Range")
+    vehicle_type = st.selectbox("Select Vehicle Type", ["Car", "Motorbike", "Tuk-tuk"])
+    vehicle_cc = st.number_input("Enter Vehicle CC", min_value=50)
+    battery_cc = st.number_input("Enter Battery CC", min_value=50)
+    percent_charge = st.slider("Current Battery %", 1, 100, 50)
 
+    if st.button("Estimate Range"):
+        result = estimate_range(vehicle_type, vehicle_cc, battery_cc, percent_charge)
+        if result:
+            st.success(f"🔋 Estimated Range: {result} km")
+        else:
+            st.error("Could not calculate range. Check input values.")
+
+# App runner
 def run_app():
-    if st.session_state.authenticated:
-        main_app()
-    else:
+    if "logged_in" not in st.session_state:
         show_welcome()
+    elif st.session_state.logged_in:
+        main_dashboard()
+    else:
+        login_page()
 
 if __name__ == "__main__":
     run_app()
