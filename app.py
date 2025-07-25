@@ -1,107 +1,180 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
+import numpy as np
+import json
 import os
-from utils.auth import login_user, logout_user, register_user, is_authenticated
-from utils.mapbox import get_nearest_stations
-from utils.analytics import get_battery_data, generate_battery_chart
+import math
+import matplotlib.pyplot as plt
+import pydeck as pdk
 
-# ---- PAGE CONFIG ----
-st.set_page_config(page_title="Tende EV Dashboard", layout="wide")
+# ------------- USER AUTHENTICATION FUNCTIONS ------------- #
 
-# ---- SESSION STATE SETUP ----
-if "logged_in" not in st.session_state:
+USER_DB = "users.json"
+
+if not os.path.exists(USER_DB):
+    with open(USER_DB, "w") as f:
+        json.dump({}, f)
+
+def register_user(email, password):
+    with open(USER_DB, "r") as f:
+        users = json.load(f)
+    if email in users:
+        return False
+    users[email] = {"password": password}
+    with open(USER_DB, "w") as f:
+        json.dump(users, f)
+    return True
+
+def login_user(email, password):
+    with open(USER_DB, "r") as f:
+        users = json.load(f)
+    return email in users and users[email]["password"] == password
+
+def is_authenticated():
+    return st.session_state.get("logged_in", False)
+
+def logout_user():
     st.session_state.logged_in = False
-if "email" not in st.session_state:
     st.session_state.email = None
 
 
-# ---- LOGIN PAGE ----
-def login():
-    st.title("🔐 Login")
+# ------------- MOCK CHARGING STATION DATA ------------- #
+
+stations_data = pd.DataFrame([
+    {"name": "Karen Mall Station", "lat": -1.329, "lon": 36.715},
+    {"name": "Lang’ata Road Station", "lat": -1.360, "lon": 36.759},
+    {"name": "Wilson Airport Station", "lat": -1.319, "lon": 36.814},
+    {"name": "Nairobi CBD Station", "lat": -1.286, "lon": 36.817},
+    {"name": "Galleria Mall Station", "lat": -1.343, "lon": 36.713},
+])
+
+# ------------- HELPER FUNCTIONS ------------- #
+
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
+    return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
+
+def get_coordinates_from_location(location):
+    location_map = {
+        "langata": (-1.360, 36.759),
+        "karen": (-1.329, 36.715),
+        "cbd": (-1.286, 36.817),
+    }
+    return location_map.get(location.lower())
+
+def find_nearest_stations(location, k=3):
+    coords = get_coordinates_from_location(location)
+    if coords is None:
+        return []
+    lat, lon = coords
+    stations_data["distance"] = stations_data.apply(
+        lambda row: haversine(lat, lon, row["lat"], row["lon"]), axis=1
+    )
+    return stations_data.sort_values("distance").head(k)
+
+
+# ------------- MAIN APP PAGES ------------- #
+
+def login_page():
+    st.title("🔐 EV Dashboard Login")
+
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
     if st.button("Login"):
         if login_user(email, password):
+            st.success("Logged in!")
             st.session_state.logged_in = True
             st.session_state.email = email
-            st.success("Login successful.")
-            st.rerun()
         else:
-            st.error("Invalid email or password.")
+            st.error("Invalid credentials")
+
+    st.markdown("---")
+    st.subheader("New here?")
+    new_email = st.text_input("New Email", key="new_email")
+    new_password = st.text_input("New Password", type="password", key="new_pass")
     if st.button("Register"):
-        st.session_state.register = True
-        st.rerun()
-
-
-# ---- REGISTER PAGE ----
-def register():
-    st.title("📝 Register")
-    email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
-    if st.button("Create Account"):
-        if register_user(email, password):
-            st.success("Account created! Please log in.")
-            st.session_state.register = False
-            st.rerun()
+        if register_user(new_email, new_password):
+            st.success("Registration successful!")
         else:
-            st.error("Email already registered.")
-    if st.button("Back to Login"):
-        st.session_state.register = False
-        st.rerun()
+            st.error("Email already exists")
 
 
-# ---- LOGOUT ----
-def logout():
-    logout_user()
-    st.session_state.logged_in = False
-    st.session_state.email = None
-    st.success("Logged out successfully.")
-    st.rerun()
+def dashboard_page():
+    st.title("⚡ EV Smart Dashboard")
+
+    if st.button("🔓 Logout"):
+        logout_user()
+
+    st.subheader("🔋 Battery Analytics")
+    battery_data = pd.DataFrame({
+        "Time": pd.date_range(start="2024-01-01", periods=12, freq="M"),
+        "Charge Level": np.random.randint(40, 100, size=12),
+    })
+    fig, ax = plt.subplots()
+    ax.plot(battery_data["Time"], battery_data["Charge Level"], marker="o", color="green")
+    ax.set_title("Battery Level Over Time")
+    ax.set_ylabel("% Charge")
+    ax.set_xlabel("Month")
+    st.pyplot(fig)
+
+    st.markdown("---")
+    st.subheader("🗺️ Find Nearest Charging Stations")
+    user_location = st.text_input("Enter your location (e.g., langata, karen, cbd)")
+
+    if st.button("🔍 Search"):
+        results = find_nearest_stations(user_location)
+        if not results.empty:
+            st.write("Nearest Charging Stations:")
+            for _, row in results.iterrows():
+                st.write(f"- {row['name']} ({row['distance']:.2f} km)")
+            # Map
+            st.pydeck_chart(pdk.Deck(
+                initial_view_state=pdk.ViewState(
+                    latitude=results["lat"].mean(),
+                    longitude=results["lon"].mean(),
+                    zoom=12,
+                    pitch=0,
+                ),
+                layers=[
+                    pdk.Layer(
+                        "ScatterplotLayer",
+                        data=results,
+                        get_position="[lon, lat]",
+                        get_radius=500,
+                        get_fill_color=[0, 128, 255, 140],
+                        pickable=True,
+                    )
+                ],
+            ))
+        else:
+            st.warning("No charging stations found for that location.")
 
 
-# ---- MAIN APP CONTENT ----
-def main_app():
-    st.sidebar.title("Navigation")
-    menu = st.sidebar.radio("Go to", ["🏠 Welcome", "🔋 Battery Analytics", "🔌 Find Charging Stations"])
-    st.sidebar.button("Logout", on_click=logout)
+# ------------- APP ENTRY POINT ------------- #
 
-    if menu == "🏠 Welcome":
-        st.header(f"Welcome, {st.session_state.email} 👋")
-        st.write("Use the sidebar to navigate the dashboard features.")
-
-    elif menu == "🔋 Battery Analytics":
-        st.header("🔋 Battery Performance Analytics")
-        data = get_battery_data()
-        fig = generate_battery_chart(data)
-        st.pyplot(fig)
-
-    elif menu == "🔌 Find Charging Stations":
-        st.header("🔌 Nearby Charging Stations")
-        location = st.text_input("Enter location (e.g., Langata, Nairobi):")
-        if st.button("Search"):
-            with st.spinner("Searching..."):
-                results = get_nearest_stations(location)
-                if results:
-                    st.subheader("Top 3 Nearest Stations:")
-                    for station in results:
-                        st.markdown(f"**{station['name']}** - {station['address']}")
-                else:
-                    st.warning("No charging stations found for that location.")
-
-
-# ---- ENTRY POINT ----
 def main():
-    if st.session_state.get("register", False):
-        register()
-    elif not st.session_state.logged_in:
-        login()
-    else:
-        main_app()
+    st.set_page_config(page_title="EV Dashboard", layout="centered")
 
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+        st.session_state.email = None
+
+    if st.session_state.logged_in:
+        dashboard_page()
+    else:
+        login_page()
 
 if __name__ == "__main__":
     main()
+
 
 
 
