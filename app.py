@@ -1,174 +1,165 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
-import json
-import os
+import requests
 import math
-import matplotlib.pyplot as plt
-import pydeck as pdk
 
-# ------------- USER AUTHENTICATION FUNCTIONS ------------- #
+# Get Mapbox API key from secrets.toml
+MAPBOX_API_KEY = st.secrets["mapbox"]["api_key"]
 
-USER_DB = "users.json"
-
-if not os.path.exists(USER_DB):
-    with open(USER_DB, "w") as f:
-        json.dump({}, f)
-
-def register_user(email, password):
-    with open(USER_DB, "r") as f:
-        users = json.load(f)
-    if email in users:
-        return False
-    users[email] = {"password": password}
-    with open(USER_DB, "w") as f:
-        json.dump(users, f)
-    return True
+# Initialize session state
+if "users" not in st.session_state:
+    st.session_state.users = {}  # {email: password}
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+if "email" not in st.session_state:
+    st.session_state.email = ""
 
 def login_user(email, password):
-    with open(USER_DB, "r") as f:
-        users = json.load(f)
-    return email in users and users[email]["password"] == password
+    users = st.session_state.users
+    return email in users and users[email] == password
 
-def is_authenticated():
-    return st.session_state.get("logged_in", False)
+def register_user(email, password):
+    if email in st.session_state.users:
+        return False
+    st.session_state.users[email] = password
+    return True
 
 def logout_user():
-    st.session_state.logged_in = False
-    st.session_state.email = None
+    st.session_state.authenticated = False
+    st.session_state.email = ""
 
+def calculate_range(vehicle_type, engine_cc, battery_kwh, charge_percent):
+    base_efficiency = 5  # km per kWh base
+    if vehicle_type.lower() == "car":
+        efficiency_factor = 1.0
+    elif vehicle_type.lower() == "motorbike":
+        efficiency_factor = 1.5
+    else:
+        efficiency_factor = 1.0
 
-# ------------- MOCK CHARGING STATION DATA ------------- #
+    if engine_cc < 100:
+        efficiency_factor *= 1.3
+    elif engine_cc > 1500:
+        efficiency_factor *= 0.7
 
-stations_data = pd.DataFrame([
-    {"name": "Karen Mall Station", "lat": -1.329, "lon": 36.715},
-    {"name": "Lang’ata Road Station", "lat": -1.360, "lon": 36.759},
-    {"name": "Wilson Airport Station", "lat": -1.319, "lon": 36.814},
-    {"name": "Nairobi CBD Station", "lat": -1.286, "lon": 36.817},
-    {"name": "Galleria Mall Station", "lat": -1.343, "lon": 36.713},
-])
-
-# ------------- HELPER FUNCTIONS ------------- #
+    estimated_km = battery_kwh * (charge_percent / 100) * base_efficiency * efficiency_factor
+    return round(estimated_km, 1)
 
 def haversine(lat1, lon1, lat2, lon2):
-    R = 6371
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(math.radians(lat1))
-        * math.cos(math.radians(lat2))
-        * math.sin(dlon / 2) ** 2
-    )
-    return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
+    R = 6371  # Earth radius in km
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
 
-def get_coordinates_from_location(location):
-    location_map = {
-        "langata": (-1.360, 36.759),
-        "karen": (-1.329, 36.715),
-        "cbd": (-1.286, 36.817),
+def find_nearby_stations(lat, lon, max_results=3):
+    url = f"https://api.mapbox.com/geocoding/v5/mapbox.places/charging%20station.json"
+    params = {
+        "proximity": f"{lon},{lat}",
+        "limit": 10,
+        "access_token": MAPBOX_API_KEY,
+        "types": "poi"
     }
-    return location_map.get(location.lower())
+    response = requests.get(url, params=params)
+    data = response.json()
 
-def find_nearest_stations(location, k=3):
-    coords = get_coordinates_from_location(location)
-    if coords is None:
-        return []
-    lat, lon = coords
-    stations_data["distance"] = stations_data.apply(
-        lambda row: haversine(lat, lon, row["lat"], row["lon"]), axis=1
-    )
-    return stations_data.sort_values("distance").head(k)
+    stations = []
+    if "features" in data:
+        for feature in data["features"]:
+            name = feature.get("text", "Unknown")
+            coords = feature.get("geometry", {}).get("coordinates", [None, None])
+            if coords[1] is not None and coords[0] is not None:
+                distance = haversine(lat, lon, coords[1], coords[0])
+                stations.append({
+                    "name": name,
+                    "lat": coords[1],
+                    "lon": coords[0],
+                    "distance_km": distance
+                })
 
-
-# ------------- MAIN APP PAGES ------------- #
+    stations = sorted(stations, key=lambda x: x["distance_km"])
+    return stations[:max_results]
 
 def login_page():
-    st.title("🔐 EV Dashboard Login")
+    st.title("🔌 Twende EV - Login / Register")
+
+    choice = st.radio("Select option", ["Login", "Register"])
 
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
-    if st.button("Login"):
-        if login_user(email, password):
-            st.success("Logged in!")
-            st.session_state.logged_in = True
-            st.session_state.email = email
-        else:
-            st.error("Invalid credentials")
 
-    st.markdown("---")
-    st.subheader("New here?")
-    new_email = st.text_input("New Email", key="new_email")
-    new_password = st.text_input("New Password", type="password", key="new_pass")
-    if st.button("Register"):
-        if register_user(new_email, new_password):
-            st.success("Registration successful!")
-        else:
-            st.error("Email already exists")
+    if choice == "Register":
+        if st.button("Register"):
+            if email and password:
+                if register_user(email, password):
+                    st.success("Registration successful! Please log in.")
+                else:
+                    st.error("User already exists.")
+            else:
+                st.error("Please enter email and password.")
 
+    elif choice == "Login":
+        if st.button("Login"):
+            if login_user(email, password):
+                st.session_state.authenticated = True
+                st.session_state.email = email
+                st.success(f"Welcome, {email}!")
+                st.experimental_rerun()
+            else:
+                st.error("Invalid email or password.")
 
-def dashboard_page():
-    st.title("⚡ EV Smart Dashboard")
+def main_app():
+    st.title("🚗 Twende EV Charging & Range Assistant")
 
-    if st.button("🔓 Logout"):
+    st.sidebar.write(f"Logged in as: {st.session_state.email}")
+    if st.sidebar.button("Logout"):
         logout_user()
+        st.experimental_rerun()
 
-    st.subheader("🔋 Battery Analytics")
-    battery_data = pd.DataFrame({
-        "Time": pd.date_range(start="2024-01-01", periods=12, freq="M"),
-        "Charge Level": np.random.randint(40, 100, size=12),
-    })
-    fig, ax = plt.subplots()
-    ax.plot(battery_data["Time"], battery_data["Charge Level"], marker="o", color="green")
-    ax.set_title("Battery Level Over Time")
-    ax.set_ylabel("% Charge")
-    ax.set_xlabel("Month")
-    st.pyplot(fig)
+    st.header("Calculate Your EV Range")
+    vehicle_type = st.selectbox("Vehicle Type", ["Car", "Motorbike", "Other"])
+    engine_cc = st.number_input("Engine CC", min_value=50, max_value=5000, value=1500, step=10)
+    battery_kwh = st.number_input("Battery Capacity (kWh)", min_value=1.0, max_value=200.0, value=40.0, step=0.5)
+    charge_percent = st.slider("Current Battery Charge (%)", 0, 100, 75)
+
+    if st.button("Calculate Range"):
+        est_range = calculate_range(vehicle_type, engine_cc, battery_kwh, charge_percent)
+        st.success(f"Estimated driving range: **{est_range} km**")
 
     st.markdown("---")
-    st.subheader("🗺️ Find Nearest Charging Stations")
-    user_location = st.text_input("Enter your location (e.g., langata, karen, cbd)")
+    st.header("Find Nearby Charging Stations")
 
-    if st.button("🔍 Search"):
-        results = find_nearest_stations(user_location)
-        if not results.empty:
-            st.write("Nearest Charging Stations:")
-            for _, row in results.iterrows():
-                st.write(f"- {row['name']} ({row['distance']:.2f} km)")
-            # Map
-            st.pydeck_chart(pdk.Deck(
-                initial_view_state=pdk.ViewState(
-                    latitude=results["lat"].mean(),
-                    longitude=results["lon"].mean(),
-                    zoom=12,
-                    pitch=0,
-                ),
-                layers=[
-                    pdk.Layer(
-                        "ScatterplotLayer",
-                        data=results,
-                        get_position="[lon, lat]",
-                        get_radius=500,
-                        get_fill_color=[0, 128, 255, 140],
-                        pickable=True,
-                    )
-                ],
-            ))
-        else:
-            st.warning("No charging stations found for that location.")
+    location_input = st.text_input("Enter your location (e.g., Nairobi CBD):")
 
+    if location_input:
+        try:
+            # Use Mapbox Geocoding API to get coordinates for the location input
+            geocode_url = f"https://api.mapbox.com/geocoding/v5/mapbox.places/{location_input}.json"
+            geocode_params = {"access_token": MAPBOX_API_KEY, "limit": 1}
+            resp = requests.get(geocode_url, params=geocode_params)
+            geocode_data = resp.json()
 
-# ------------- APP ENTRY POINT ------------- #
+            if "features" in geocode_data and len(geocode_data["features"]) > 0:
+                coords = geocode_data["features"][0]["geometry"]["coordinates"]
+                lon, lat = coords[0], coords[1]
+
+                stations = find_nearby_stations(lat, lon)
+
+                if stations:
+                    st.write(f"Charging stations near **{location_input}**:")
+                    for s in stations:
+                        st.write(f"- **{s['name']}** ({s['distance_km']:.2f} km away) at (Lat: {s['lat']:.4f}, Lon: {s['lon']:.4f})")
+                else:
+                    st.info("No charging stations found nearby.")
+            else:
+                st.warning("Location not found. Please try a more specific query.")
+        except Exception as e:
+            st.error(f"Error fetching charging stations: {e}")
 
 def main():
-    st.set_page_config(page_title="EV Dashboard", layout="centered")
-
-    if "logged_in" not in st.session_state:
-        st.session_state.logged_in = False
-        st.session_state.email = None
-
-    if st.session_state.logged_in:
-        dashboard_page()
+    if st.session_state.authenticated:
+        main_app()
     else:
         login_page()
 
