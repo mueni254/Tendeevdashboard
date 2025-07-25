@@ -1,125 +1,113 @@
 import streamlit as st
-import pandas as pd
 import pydeck as pdk
-from geopy.geocoders import Nominatim
+import pandas as pd
 import requests
+from geopy.geocoders import Nominatim
 
-st.set_page_config(page_title="Nairobi EV Charging Station Finder", layout="wide")
+# Set up Mapbox token
+pdk.settings.mapbox_api_key = st.secrets["mapbox"]["api_key"]
 
-# Load your Mapbox API key from secrets
-MAPBOX_API_KEY = st.secrets["mapbox"]["api_key"]
-pdk.settings.mapbox_api_key = MAPBOX_API_KEY
+# --------------------------
+# SESSION STATE SETUP
+# --------------------------
+if "registered_users" not in st.session_state:
+    st.session_state.registered_users = {}
 
-# Hardcoded Nairobi EV stations (replace/update as needed)
-hardcoded_stations = pd.DataFrame([
-    {"name": "The Hub EV Charging Station", "lat": -1.275, "lon": 36.819},
-    {"name": "Garden City EV Charging", "lat": -1.258, "lon": 36.888},
-    {"name": "Two Rivers Mall EV Station", "lat": -1.228, "lon": 36.841},
-    {"name": "Kenya Power EV Charging", "lat": -1.286, "lon": 36.817},
-    {"name": "Westgate Mall EV Charging", "lat": -1.273, "lon": 36.797},
-])
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
 
-def search_mapbox_ev_stations(lat, lon, limit=5):
-    """Search Mapbox Places API for EV charging stations near lat/lon."""
-    url = f"https://api.mapbox.com/geocoding/v5/mapbox.places/charging station.json"
-    params = {
-        "proximity": f"{lon},{lat}",
-        "types": "poi",
-        "limit": limit,
-        "access_token": MAPBOX_API_KEY,
-        "country": "KE",  # Kenya country code to limit search
-    }
-    response = requests.get(url, params=params)
-    if response.status_code != 200:
-        st.error("Error fetching data from Mapbox Places API.")
-        return pd.DataFrame()
+if "email" not in st.session_state:
+    st.session_state.email = ""
 
-    data = response.json()
-    features = data.get("features", [])
-    results = []
-    for feat in features:
-        coords = feat["geometry"]["coordinates"]
-        name = feat["text"]
-        results.append({"name": name, "lon": coords[0], "lat": coords[1]})
-    return pd.DataFrame(results)
+# --------------------------
+# WELCOME PAGE + LOGIN FORM
+# --------------------------
+def show_welcome():
+    st.markdown("# 🚗 Welcome to Twende EV")
+    st.markdown("### Powering the Future of Mobility – One Charge at a Time")
+    st.write("""
+    Empower your electric driving experience with real-time insights, intelligent analytics, and seamless control.
 
-def haversine_distance(lat1, lon1, lat2, lon2):
-    """Calculate distance between two lat/lon points in km."""
-    from math import radians, sin, cos, sqrt, atan2
-    R = 6371  # Earth radius km
+    **Key Benefits**  
+    - 🔋 Smart Charging: No more guesswork—get precise, data-driven charging recommendations.  
+    - 🗺️ Journey Confidence: Plan routes with real-time battery and station insights.  
+    - ⚙️ Proactive Maintenance: Stay ahead with alerts and diagnostics tailored to your EV.
 
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
-    c = 2*atan2(sqrt(a), sqrt(1 - a))
-    return R * c
+    ---
+    **Drive Smarter. Charge Smarter.**  
+    Log in now to take full command of your electric journey.
+    """)
 
-st.title("🔋 EV Charging Station Finder — Nairobi")
+    option = st.radio("Select an option", ["Log In", "Register"])
 
-location_input = st.text_input("Enter your location in Nairobi (e.g., Kilimani, Westlands)")
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
 
-if location_input:
-    geolocator = Nominatim(user_agent="ev_locator")
-    location = geolocator.geocode(f"{location_input}, Nairobi, Kenya")
+    if option == "Register":
+        if st.button("Register"):
+            if email and password:
+                st.session_state.registered_users[email] = password
+                st.success("✅ Registration successful! You can now log in.")
+            else:
+                st.error("Please provide both email and password.")
 
-    if location:
-        user_lat, user_lon = location.latitude, location.longitude
+    if option == "Log In":
+        if st.button("Log In"):
+            if st.session_state.registered_users.get(email) == password:
+                st.session_state.authenticated = True
+                st.session_state.email = email
+                st.success(f"✅ Welcome back, {email}!")
+                st.experimental_rerun()
+            else:
+                st.error("Invalid email or password.")
 
-        # Search Mapbox API for nearby EV stations
-        mapbox_stations = search_mapbox_ev_stations(user_lat, user_lon, limit=5)
+# --------------------------
+# MAIN APP AFTER LOGIN
+# --------------------------
+def main_app():
+    st.markdown(f"### 👋 Hello, {st.session_state.email}")
+    st.title("EV Charging Station Finder (Nairobi)")
 
-        # Combine hardcoded and Mapbox stations
-        combined = pd.concat([hardcoded_stations, mapbox_stations], ignore_index=True)
+    location_input = st.text_input("Enter your location (e.g., Nairobi CBD):")
 
-        # Calculate distance to user location
-        combined["distance_km"] = combined.apply(
-            lambda row: haversine_distance(user_lat, user_lon, row["lat"], row["lon"]), axis=1
-        )
+    if location_input:
+        try:
+            geolocator = Nominatim(user_agent="ev_locator")
+            location = geolocator.geocode(location_input)
+            if location:
+                lat, lon = location.latitude, location.longitude
 
-        # Pick 3 nearest stations
-        nearest = combined.nsmallest(3, "distance_km")
+                # Hybrid approach
+                stations = [
+                    {"name": "Hardcoded Station A", "lat": -1.2921, "lon": 36.8219},
+                    {"name": "Hardcoded Station B", "lat": -1.3000, "lon": 36.8155},
+                    {"name": "Hardcoded Station C", "lat": -1.2800, "lon": 36.8250},
+                ]
 
-        st.success(f"Nearest 3 EV charging stations to {location_input}:")
+                df = pd.DataFrame(stations)
 
-        for i, row in nearest.iterrows():
-            st.write(f"**{row['name']}** — approx {row['distance_km']:.2f} km away")
+                st.map(df, latitude="lat", longitude="lon")
 
-        # Prepare map data: user + stations
-        map_data = pd.DataFrame([
-            {"name": "You", "lat": user_lat, "lon": user_lon, "color": [255, 0, 0, 160], "radius": 500},
-            *[
-                {"name": row["name"], "lat": row["lat"], "lon": row["lon"], "color": [0, 150, 255, 160], "radius": 300}
-                for _, row in nearest.iterrows()
-            ]
-        ])
+                st.write("### Nearest Charging Stations")
+                for s in stations:
+                    st.write(f"- **{s['name']}** @ ({s['lat']:.4f}, {s['lon']:.4f})")
+            else:
+                st.warning("📍 Location not found. Try being more specific.")
+        except Exception as e:
+            st.error(f"Error fetching location: {e}")
 
-        layer = pdk.Layer(
-            "ScatterplotLayer",
-            data=map_data,
-            get_position='[lon, lat]',
-            get_fill_color='color',
-            get_radius='radius',
-            pickable=True,
-        )
+    if st.button("🔒 Log out"):
+        st.session_state.authenticated = False
+        st.experimental_rerun()
 
-        view_state = pdk.ViewState(
-            latitude=user_lat,
-            longitude=user_lon,
-            zoom=13,
-            pitch=0,
-        )
-
-        st.pydeck_chart(pdk.Deck(
-            map_style='mapbox://styles/mapbox/streets-v11',
-            initial_view_state=view_state,
-            layers=[layer],
-            tooltip={"text": "{name}"}
-        ))
-
-    else:
-        st.error("Could not find that location in Nairobi. Please try a more specific place.")
+# --------------------------
+# APP ROUTING
+# --------------------------
+if st.session_state.authenticated:
+    main_app()
 else:
-    st.info("Enter a location within Nairobi to find nearby EV charging stations.")
+    show_welcome()
+
 
 
 
