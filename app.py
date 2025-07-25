@@ -3,56 +3,59 @@ import pandas as pd
 import pydeck as pdk
 from geopy.geocoders import Nominatim
 
-# Set page title
-st.set_page_config(page_title="EV Charging Map", layout="wide")
+st.set_page_config(page_title="Nairobi EV Charging Station Finder", layout="wide")
 
-# Load Mapbox key from secrets
 pdk.settings.mapbox_api_key = st.secrets["mapbox"]["api_key"]
 
-# Sample EV charging stations data
+# Hardcoded stations in Nairobi area (latitude and longitude approx)
 stations_data = pd.DataFrame([
-    {"name": "EV Station Nairobi", "lat": -1.2921, "lon": 36.8219},
-    {"name": "EV Station Mombasa", "lat": -4.0435, "lon": 39.6682},
-    {"name": "EV Station Kisumu", "lat": -0.0917, "lon": 34.7679},
+    {"name": "Westlands EV Station", "lat": -1.265, "lon": 36.807},
+    {"name": "Kilimani EV Station", "lat": -1.292, "lon": 36.794},
+    {"name": "CBD EV Station", "lat": -1.283, "lon": 36.821},
+    {"name": "Karen EV Station", "lat": -1.324, "lon": 36.726},
+    {"name": "Langata EV Station", "lat": -1.365, "lon": 36.747},
 ])
 
-# Title
-st.title("🔋 EV Charging Station Finder (Kenya)")
+st.title("🔋 EV Charging Station Finder — Nairobi")
 
-# User input
-location_input = st.text_input("Enter your location (e.g., Nairobi, Mombasa)")
+location_input = st.text_input("Enter your location in Nairobi (e.g., Kilimani, Westlands)")
 
 if location_input:
-    with st.spinner("Searching location..."):
-        geolocator = Nominatim(user_agent="ev_locator")
-        location = geolocator.geocode(location_input)
+    geolocator = Nominatim(user_agent="ev_locator")
+    location = geolocator.geocode(f"{location_input}, Nairobi, Kenya")
+    if location:
+        user_lat, user_lon = location.latitude, location.longitude
 
-        if location:
-            user_lat = location.latitude
-            user_lon = location.longitude
+        # Calculate distance (approximate) using Euclidean distance for simplicity
+        stations_data["distance"] = ((stations_data["lat"] - user_lat)**2 + (stations_data["lon"] - user_lon)**2)**0.5
 
-            # Find nearest station
-            stations_data["distance"] = ((stations_data["lat"] - user_lat)**2 + (stations_data["lon"] - user_lon)**2)**0.5
-            nearest_station = stations_data.loc[stations_data["distance"].idxmin()]
+        # Filter stations within a radius (~0.05 degrees ~ 5km approx)
+        nearby_stations = stations_data[stations_data["distance"] < 0.05]
 
+        if nearby_stations.empty:
+            st.warning("No EV charging stations found near your location in Nairobi.")
+        else:
+            nearest_station = nearby_stations.loc[nearby_stations["distance"].idxmin()]
             st.success(f"Nearest station: {nearest_station['name']}")
 
-            # Plot on map
+            # Plot user and stations on the map
+            map_data = pd.DataFrame([
+                {"name": "You", "lat": user_lat, "lon": user_lon},
+                *nearby_stations[["name", "lat", "lon"]].to_dict(orient="records")
+            ])
+
             layer = pdk.Layer(
                 "ScatterplotLayer",
-                data=pd.DataFrame([
-                    {"name": "You", "lat": user_lat, "lon": user_lon},
-                    {"name": nearest_station["name"], "lat": nearest_station["lat"], "lon": nearest_station["lon"]},
-                ]),
+                data=map_data,
                 get_position='[lon, lat]',
                 get_color='[0, 150, 255, 160]',
-                get_radius=30000,
+                get_radius=300,
             )
 
             view_state = pdk.ViewState(
                 latitude=user_lat,
                 longitude=user_lon,
-                zoom=6,
+                zoom=13,
                 pitch=0,
             )
 
@@ -62,10 +65,10 @@ if location_input:
                 layers=[layer],
                 tooltip={"text": "{name}"}
             ))
-
-        else:
-            st.error("Location not found. Please try a more specific name.")
+    else:
+        st.error("Could not find that location in Nairobi. Please try a more specific place.")
 else:
-    st.info("Enter your location to find the nearest EV charging station.")
+    st.info("Enter a location within Nairobi to find nearby EV charging stations.")
+
 
 
