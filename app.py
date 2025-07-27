@@ -129,7 +129,7 @@ def dashboard():
     # Range Calculator
     st.markdown("## 🔋 Estimate Your EV Range")
     vehicle_reg = st.text_input("Vehicle Registration Number")
-    vehicle_type = st.selectbox("Vehicle Type", ["Car", Van", "Bike"])
+    vehicle_type = st.selectbox("Vehicle Type", ["Car", "Van", "Bike"])
     vehicle_cc = st.number_input("Engine CC", min_value=50, max_value=5000, step=50)
     battery_capacity = st.number_input("Battery Capacity (kWh)", min_value=5.0, max_value=200.0, value=40.0)
 
