@@ -1,270 +1,185 @@
 import streamlit as st
-import requests
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 import folium
 from streamlit_folium import st_folium
+import json
+import os
 
-# -----------------------
-# User Storage in session_state
-# -----------------------
-if "users" not in st.session_state:
-    st.session_state["users"] = {}
+# --------------------------
+# USER AUTH SYSTEM
+# --------------------------
+
+USER_DB = "users.json"
+
+def load_users():
+    if os.path.exists(USER_DB):
+        with open(USER_DB, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_users(users):
+    with open(USER_DB, "w") as f:
+        json.dump(users, f, indent=4)
 
 def register_user(email, password):
-    users = st.session_state["users"]
+    users = load_users()
     if email in users:
         return False
-    users[email] = {"password": password, "vehicle_info": {}}
-    st.session_state["users"] = users
+    users[email] = {"password": password}
+    save_users(users)
     return True
 
 def login_user(email, password):
-    users = st.session_state.get("users", {})
+    users = load_users()
     return email in users and users[email]["password"] == password
 
 def logout_user():
-    st.session_state["authenticated"] = False
-    st.session_state["email"] = None
+    for key in ["authenticated", "email"]:
+        if key in st.session_state:
+            del st.session_state[key]
 
-def is_authenticated():
-    return st.session_state.get("authenticated", False)
+# --------------------------
+# CHARGING STATION LOCATOR
+# --------------------------
 
-# -----------------------
-# EV Station Fetcher
-# -----------------------
-def get_nearest_charging_stations(user_location, max_results=5):
-    api_key = st.secrets["open_charge_map"]["api_key"]
-    latitude, longitude = user_location
+geolocator = Nominatim(user_agent="ev_app")
 
-    url = (
-        f"https://api.openchargemap.io/v3/poi/?output=json&latitude={latitude}&longitude={longitude}"
-        f"&distance=20&distanceunit=KM&maxresults=20&key={api_key}"
-    )
+CHARGING_STATIONS = [
+    {"name": "ABC EV Station - Nairobi", "location": (-1.2921, 36.8219)},
+    {"name": "XYZ Power Charge - Westlands", "location": (-1.2675, 36.8121)},
+    {"name": "E-Moto FastCharge - Kiambu", "location": (-1.1596, 36.8445)},
+    {"name": "RapidCharge EV - Karen", "location": (-1.3337, 36.6997)}
+]
 
-    response = requests.get(url)
-    if response.status_code != 200:
-        st.error("Failed to fetch charging stations.")
-        return []
+def geocode_location(location_name):
+    try:
+        loc = geolocator.geocode(location_name)
+        return (loc.latitude, loc.longitude) if loc else None
+    except:
+        return None
 
-    data = response.json()
-    stations = []
+def get_nearest_charging_stations(coords, num=3):
+    stations_with_distance = []
+    for station in CHARGING_STATIONS:
+        dist = geodesic(coords, station["location"]).km
+        stations_with_distance.append({**station, "distance": dist})
+    return sorted(stations_with_distance, key=lambda x: x["distance"])[:num]
 
-    for station in data:
-        if "AddressInfo" in station:
-            station_info = {
-                "name": station["AddressInfo"].get("Title", "Unknown"),
-                "latitude": station["AddressInfo"]["Latitude"],
-                "longitude": station["AddressInfo"]["Longitude"],
-                "distance": geodesic(user_location, (station["AddressInfo"]["Latitude"], station["AddressInfo"]["Longitude"])).km,
-            }
-            stations.append(station_info)
-
-    stations.sort(key=lambda x: x["distance"])
-    return stations[:max_results]
-
-# -----------------------
-# Range Calculator
-# -----------------------
-def calculate_range(battery_capacity_kwh, vehicle_type):
-    # Average consumption rates (kWh per 100 km) by vehicle type (approximate)
-    consumption_rates = {
-        "Motorbike": 3.0,
-        "Car": 15.0,
-        "Tuk-tuk": 6.0,
-    }
-    consumption_rate = consumption_rates.get(vehicle_type, 15.0)  # default 15 if unknown
-    range_km = (battery_capacity_kwh / consumption_rate) * 100
-    return range_km
-
-# -----------------------
-# Map Rendering
-# -----------------------
-def show_map(user_location, stations):
-    m = folium.Map(location=user_location, zoom_start=12)
-
-    # Add user location
-    folium.Marker(user_location, tooltip="Your Location", icon=folium.Icon(color='blue')).add_to(m)
-
-    # Add station markers
-    for station in stations:
-        folium.Marker(
-            location=[station["latitude"], station["longitude"]],
-            popup=f"{station['name']} ({station['distance']:.2f} km)",
-            icon=folium.Icon(color='green')
-        ).add_to(m)
-
+def show_map(center, stations):
+    m = folium.Map(location=center, zoom_start=12)
+    folium.Marker(center, tooltip="Your Location", icon=folium.Icon(color='blue')).add_to(m)
+    for s in stations:
+        folium.Marker(location=s["location"], tooltip=s["name"], icon=folium.Icon(color='green')).add_to(m)
     st_folium(m, width=700)
 
-# -----------------------
-# Geocode location name to lat/lon
-# -----------------------
-def geocode_location(location_name):
-    geolocator = Nominatim(user_agent="twende_ev_app")
-    try:
-        location = geolocator.geocode(location_name)
-        if location:
-            return (location.latitude, location.longitude)
-    except:
-        pass
-    return None
+# --------------------------
+# MAIN PAGES
+# --------------------------
 
-# -----------------------
-# Login Page
-# -----------------------
-def login_page():
-    st.title("🔐 Login")
+def show_welcome_message():
+    st.markdown("""
+        ## 👋 Welcome to Twende EV
+        ### Powering the Future of Mobility – One Charge at a Time
 
-    st.markdown(
-        """
-        **Welcome to Twende EV**  
-        *Powering the Future of Mobility – One Charge at a Time*
+        Empower your electric driving experience with real-time insights, intelligent analytics, and seamless control.  
+        **Twende EV** is designed to eliminate range anxiety, optimize charging efficiency, and keep your EV performing at its best—so you can focus on the road ahead.
 
-        Empower your electric driving experience with real-time insights, intelligent analytics, and seamless control. Twende EV is designed to eliminate range anxiety, optimize charging efficiency, and keep your EV performing at its best—so you can focus on the road ahead.
+        **Key Benefits**:
+        - 🔋 Smart Charging: No more guesswork—get precise, data-driven charging recommendations.
+        - 🗺️ Journey Confidence: Plan routes with real-time battery and station insights.
+        - 🔧 Proactive Maintenance: Stay ahead with alerts and diagnostics tailored to your EV.
 
-        **Key Benefits:**  
-        - Smart Charging: No more guesswork—get precise, data-driven charging recommendations.  
-        - Journey Confidence: Plan routes with real-time battery and station insights.  
-        - Proactive Maintenance: Stay ahead with alerts and diagnostics tailored to your EV.  
+        **Drive Smarter. Charge Smarter.**  
+        *Log in now to take full command of your electric journey.*
 
-        Drive Smarter. Charge Smarter.  
-        Log in now to take full command of your electric journey.  
-        Ready to redefine your EV experience? [Get Started]
-        """
-    )
+        ---
+    """)
 
-    with st.form("login_form"):
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-        submit = st.form_submit_button("Login")
-
-    if submit:
-        if login_user(email, password):
-            st.session_state["authenticated"] = True
-            st.session_state["email"] = email
-            st.experimental_rerun()
-        else:
-            st.error("Invalid email or password.")
-
-    st.markdown("Don't have an account?")
+def register():
+    st.header("🔐 Register")
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
     if st.button("Register"):
-        st.session_state["show_register"] = True
-        st.experimental_rerun()
-
-# -----------------------
-# Registration Page
-# -----------------------
-def register_page():
-    st.title("📝 Register")
-
-    with st.form("register_form"):
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-        submit = st.form_submit_button("Register")
-
-    if submit:
         if register_user(email, password):
-            st.success("Registration successful. You can now login.")
-            st.session_state["show_register"] = False
+            st.success("Registered successfully! Please log in.")
+        else:
+            st.error("User already exists.")
+
+def login():
+    st.header("🔓 Log In")
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+    if st.button("Log In"):
+        if login_user(email, password):
+            st.session_state.authenticated = True
+            st.session_state.email = email
+            st.success("Login successful!")
             st.experimental_rerun()
         else:
-            st.error("Email already registered.")
+            st.error("Invalid email or password")
 
-    st.markdown("Already have an account?")
-    if st.button("Back to Login"):
-        st.session_state["show_register"] = False
-        st.experimental_rerun()
-
-# -----------------------
-# Dashboard Page
-# -----------------------
 def dashboard():
-    st.title("🔋 Twende EV Charging Station Finder & Range Calculator")
+    st.title("🚘 Twende EV Dashboard")
 
     if st.button("Logout"):
         logout_user()
         st.experimental_rerun()
 
-    # User info
-    email = st.session_state.get("email")
-    user = st.session_state["users"].get(email, {})
-
-    st.markdown(f"**Logged in as:** {email}")
-
-    # Vehicle details input
-    st.markdown("### 🚗 Enter your vehicle details")
-
-    vehicle_type = st.selectbox("Vehicle Type", ["Motorbike", "Car", "Tuk-tuk"])
-    vehicle_cc = st.text_input("Engine CC (e.g., 150)")
-    battery_capacity = st.number_input("Battery Capacity (kWh)", min_value=0.1, max_value=200.0, step=0.1, value=10.0)
+    # Range Calculator
+    st.markdown("## 🔋 Estimate Your EV Range")
     vehicle_reg = st.text_input("Vehicle Registration Number")
+    vehicle_type = st.selectbox("Vehicle Type", ["Car", Van", "Bike"])
+    vehicle_cc = st.number_input("Engine CC", min_value=50, max_value=5000, step=50)
+    battery_capacity = st.number_input("Battery Capacity (kWh)", min_value=5.0, max_value=200.0, value=40.0)
 
-    # Save vehicle info in session_state users dictionary on submit
-    if st.button("Save Vehicle Details"):
-        user["vehicle_info"] = {
-            "vehicle_type": vehicle_type,
-            "vehicle_cc": vehicle_cc,
-            "battery_capacity": battery_capacity,
-            "vehicle_reg": vehicle_reg,
-        }
-        st.session_state["users"][email] = user
-        st.success("Vehicle details saved!")
+    if st.button("Estimate Range"):
+        est_range = battery_capacity * 6  # Approx. 6 km per kWh
+        st.success(f"Estimated range for your {vehicle_type} ({vehicle_reg}) is {est_range:.2f} km.")
 
-    # Location input by name
-    st.markdown("### 📍 Enter your location (city, address, or place name)")
-    location_name = st.text_input("Location")
+    # Charging Station Search
+    st.markdown("## 📍 Find Nearby Charging Stations")
+    location = st.text_input("Enter location (e.g., Nairobi, Kenya)", value="Nairobi, Kenya")
 
-    if st.button("Find Nearest Stations & Calculate Range"):
-        if not location_name:
-            st.error("Please enter a location name.")
-            return
+    if "location_coords" not in st.session_state:
+        st.session_state["location_coords"] = None
+    if "stations" not in st.session_state:
+        st.session_state["stations"] = []
 
-        coords = geocode_location(location_name)
-        if coords is None:
-            st.error("Could not find the location. Please enter a valid place name.")
-            return
-
-        stations = get_nearest_charging_stations(coords)
-
-        if stations:
-            st.success(f"Found {len(stations)} nearby stations:")
-            for s in stations:
-                st.write(f"- {s['name']} ({s['distance']:.2f} km)")
-
-            show_map(coords, stations)
+    if st.button("Find Stations"):
+        coords = geocode_location(location)
+        if coords:
+            st.session_state["location_coords"] = coords
+            st.session_state["stations"] = get_nearest_charging_stations(coords)
         else:
-            st.warning("No charging stations found nearby.")
+            st.error("Could not geocode the location.")
 
-        # Calculate and show range if vehicle info is available
-        vehicle_info = user.get("vehicle_info", {})
-        if vehicle_info:
-            range_km = calculate_range(vehicle_info.get("battery_capacity", 0), vehicle_info.get("vehicle_type", "Car"))
-            st.markdown(f"### Estimated Range: **{range_km:.1f} km** based on your vehicle's battery capacity and type.")
-        else:
-            st.info("Please save your vehicle details to see estimated range.")
+    if st.session_state["location_coords"] and st.session_state["stations"]:
+        st.success(f"Found {len(st.session_state['stations'])} stations near {location}")
+        for s in st.session_state["stations"]:
+            st.write(f"- {s['name']} ({s['distance']:.2f} km away)")
+        show_map(st.session_state["location_coords"], st.session_state["stations"])
 
-# -----------------------
-# App Entry Point
-# -----------------------
+# --------------------------
+# MAIN APP
+# --------------------------
+
 def main():
-    st.set_page_config(page_title="Twende EV Dashboard", layout="centered")
+    st.set_page_config(page_title="Twende EV", layout="wide")
+    show_welcome_message()
 
-    if "authenticated" not in st.session_state:
-        st.session_state["authenticated"] = False
-    if "show_register" not in st.session_state:
-        st.session_state["show_register"] = False
-    if "email" not in st.session_state:
-        st.session_state["email"] = None
-
-    if is_authenticated():
+    if "authenticated" in st.session_state and st.session_state["authenticated"]:
         dashboard()
-    elif st.session_state["show_register"]:
-        register_page()
     else:
-        login_page()
+        tab1, tab2 = st.tabs(["Login", "Register"])
+        with tab1:
+            login()
+        with tab2:
+            register()
 
 if __name__ == "__main__":
     main()
+
 
 
 
