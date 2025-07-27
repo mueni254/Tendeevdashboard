@@ -3,20 +3,44 @@ import requests
 from geopy.distance import geodesic
 import folium
 from streamlit_folium import st_folium
+import json
+import os
+import hashlib
+
+# User data file
+USER_FILE = "users.json"
 
 # -----------------------
-# In-memory user storage
+# User Persistence Utils
 # -----------------------
-users = {}
+def load_users():
+    if os.path.exists(USER_FILE):
+        with open(USER_FILE, "r") as f:
+            return json.load(f)
+    return {}
 
+def save_users(users):
+    with open(USER_FILE, "w") as f:
+        json.dump(users, f)
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# -----------------------
+# User Management
+# -----------------------
 def register_user(email, password):
+    users = load_users()
     if email in users:
         return False
-    users[email] = {"password": password}
+    users[email] = {"password": hash_password(password)}
+    save_users(users)
     return True
 
 def login_user(email, password):
-    return email in users and users[email]["password"] == password
+    users = load_users()
+    hashed_pw = hash_password(password)
+    return email in users and users[email]["password"] == hashed_pw
 
 def logout_user():
     st.session_state["authenticated"] = False
@@ -167,4 +191,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
