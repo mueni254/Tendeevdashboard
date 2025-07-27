@@ -1,183 +1,169 @@
 import streamlit as st
+import sqlite3
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 import folium
 from streamlit_folium import st_folium
-import json
-import os
 
-# --------------------------
-# USER AUTH SYSTEM
-# --------------------------
+# -------------------- Database Setup --------------------
+conn = sqlite3.connect('twende_ev_users.db', check_same_thread=False)
+cursor = conn.cursor()
 
-USER_DB = "users.json"
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT UNIQUE,
+        password TEXT
+    )
+''')
 
-def load_users():
-    if os.path.exists(USER_DB):
-        with open(USER_DB, "r") as f:
-            return json.load(f)
-    return {}
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS vehicles (
+        user_id INTEGER,
+        vehicle_type TEXT,
+        vehicle_cc TEXT,
+        battery_capacity REAL,
+        registration_number TEXT
+    )
+''')
+conn.commit()
 
-def save_users(users):
-    with open(USER_DB, "w") as f:
-        json.dump(users, f, indent=4)
-
-def register_user(email, password):
-    users = load_users()
-    if email in users:
-        return False
-    users[email] = {"password": password}
-    save_users(users)
-    return True
-
-def login_user(email, password):
-    users = load_users()
-    return email in users and users[email]["password"] == password
-
-def logout_user():
-    for key in ["authenticated", "email"]:
-        if key in st.session_state:
-            del st.session_state[key]
-
-# --------------------------
-# CHARGING STATION LOCATOR
-# --------------------------
-
-geolocator = Nominatim(user_agent="ev_app")
-
-CHARGING_STATIONS = [
-    {"name": "ABC EV Station - Nairobi", "location": (-1.2921, 36.8219)},
-    {"name": "XYZ Power Charge - Westlands", "location": (-1.2675, 36.8121)},
-    {"name": "E-Moto FastCharge - Kiambu", "location": (-1.1596, 36.8445)},
-    {"name": "RapidCharge EV - Karen", "location": (-1.3337, 36.6997)}
-]
-
-def geocode_location(location_name):
-    try:
-        loc = geolocator.geocode(location_name)
-        return (loc.latitude, loc.longitude) if loc else None
-    except:
-        return None
-
-def get_nearest_charging_stations(coords, num=3):
-    stations_with_distance = []
-    for station in CHARGING_STATIONS:
-        dist = geodesic(coords, station["location"]).km
-        stations_with_distance.append({**station, "distance": dist})
-    return sorted(stations_with_distance, key=lambda x: x["distance"])[:num]
-
-def show_map(center, stations):
-    m = folium.Map(location=center, zoom_start=12)
-    folium.Marker(center, tooltip="Your Location", icon=folium.Icon(color='blue')).add_to(m)
-    for s in stations:
-        folium.Marker(location=s["location"], tooltip=s["name"], icon=folium.Icon(color='green')).add_to(m)
-    st_folium(m, width=700)
-
-# --------------------------
-# MAIN PAGES
-# --------------------------
-
-def show_welcome_message():
-    st.markdown("""
-        ## 👋 Welcome to Twende EV
-        ### Powering the Future of Mobility – One Charge at a Time
-
-        Empower your electric driving experience with real-time insights, intelligent analytics, and seamless control.  
-        **Twende EV** is designed to eliminate range anxiety, optimize charging efficiency, and keep your EV performing at its best—so you can focus on the road ahead.
-
-        **Key Benefits**:
-        - 🔋 Smart Charging: No more guesswork—get precise, data-driven charging recommendations.
-        - 🗺️ Journey Confidence: Plan routes with real-time battery and station insights.
-        - 🔧 Proactive Maintenance: Stay ahead with alerts and diagnostics tailored to your EV.
-
-        **Drive Smarter. Charge Smarter.**  
-        *Log in now to take full command of your electric journey.*
-
-        ---
-    """)
-
+# -------------------- Authentication --------------------
 def register():
-    st.header("🔐 Register")
-    email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
+    st.subheader("Register")
+    email = st.text_input("Email", key="register_email")
+    password = st.text_input("Password", type="password", key="register_password")
     if st.button("Register"):
-        if register_user(email, password):
-            st.success("Registered successfully! Please log in.")
-        else:
-            st.error("User already exists.")
+        try:
+            cursor.execute("INSERT INTO users (email, password) VALUES (?, ?)", (email, password))
+            conn.commit()
+            st.success("Registration successful. Please log in.")
+        except sqlite3.IntegrityError:
+            st.error("This email is already registered.")
 
 def login():
-    st.header("🔓 Log In")
-    email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
-    if st.button("Log In"):
-        if login_user(email, password):
-            st.session_state.authenticated = True
+    st.subheader("Login")
+    st.markdown("""
+    ### Welcome to Twende EV  
+    **Powering the Future of Mobility – One Charge at a Time**
+
+    Empower your electric driving experience with real-time insights, intelligent analytics, and seamless control.
+
+    #### Key Benefits:
+    - Smart Charging: No more guesswork—get precise, data-driven charging recommendations.
+    - Journey Confidence: Plan routes with real-time battery and station insights.
+    - Proactive Maintenance: Stay ahead with alerts and diagnostics tailored to your EV.
+
+    **Drive Smarter. Charge Smarter.**
+    Log in now to take full command of your electric journey.
+    """)
+
+    email = st.text_input("Email", key="login_email")
+    password = st.text_input("Password", type="password", key="login_password")
+    if st.button("Login"):
+        cursor.execute("SELECT * FROM users WHERE email=? AND password=?", (email, password))
+        user = cursor.fetchone()
+        if user:
+            st.session_state.logged_in = True
+            st.session_state.user_id = user[0]
             st.session_state.email = email
-            st.success("Login successful!")
-            st.experimental_rerun()
+            st.success(f"Welcome back, {email}!")
         else:
-            st.error("Invalid email or password")
+            st.error("Invalid email or password.")
 
-def dashboard():
-    st.title("🚘 Twende EV Dashboard")
-
-    if st.button("Logout"):
-        logout_user()
-        st.experimental_rerun()
-
-    # Range Calculator
-    st.markdown("## 🔋 Estimate Your EV Range")
-    vehicle_reg = st.text_input("Vehicle Registration Number")
+# -------------------- Vehicle and Range --------------------
+def register_vehicle():
+    st.subheader("Register Your Vehicle")
     vehicle_type = st.selectbox("Vehicle Type", ["Car", "Van", "Bike"])
-    vehicle_cc = st.number_input("Engine CC", min_value=50, max_value=5000, step=50)
-    battery_capacity = st.number_input("Battery Capacity (kWh)", min_value=5.0, max_value=200.0, value=40.0)
+    vehicle_cc = st.text_input("Engine CC")
+    battery_capacity = st.number_input("Battery Capacity (in kWh)", min_value=1.0)
+    registration_number = st.text_input("Vehicle Registration Number")
+    
+    if st.button("Save Vehicle Details"):
+        cursor.execute("INSERT INTO vehicles (user_id, vehicle_type, vehicle_cc, battery_capacity, registration_number) VALUES (?, ?, ?, ?, ?)",
+                       (st.session_state.user_id, vehicle_type, vehicle_cc, battery_capacity, registration_number))
+        conn.commit()
+        st.success("Vehicle details saved successfully.")
 
-    if st.button("Estimate Range"):
-        est_range = battery_capacity * 6  # Approx. 6 km per kWh
-        st.success(f"Estimated range for your {vehicle_type} ({vehicle_reg}) is {est_range:.2f} km.")
+def range_estimator():
+    st.subheader("Range Estimator")
+    cursor.execute("SELECT battery_capacity FROM vehicles WHERE user_id=?", (st.session_state.user_id,))
+    result = cursor.fetchone()
+    if not result:
+        st.warning("Please register your vehicle first.")
+        return
 
-    # Charging Station Search
-    st.markdown("## 📍 Find Nearby Charging Stations")
-    location = st.text_input("Enter location (e.g., Nairobi, Kenya)", value="Nairobi, Kenya")
+    battery_capacity = result[0]
+    consumption_rate = 0.15  # kWh/km for standard car; could be adjusted by vehicle type
+    estimated_range = battery_capacity / consumption_rate
 
-    if "location_coords" not in st.session_state:
-        st.session_state["location_coords"] = None
-    if "stations" not in st.session_state:
-        st.session_state["stations"] = []
+    st.info(f"Your estimated range is **{estimated_range:.0f} km** based on a consumption rate of {consumption_rate} kWh/km.")
 
-    if st.button("Find Stations"):
-        coords = geocode_location(location)
-        if coords:
-            st.session_state["location_coords"] = coords
-            st.session_state["stations"] = get_nearest_charging_stations(coords)
-        else:
-            st.error("Could not geocode the location.")
+    geolocator = Nominatim(user_agent="twende_ev")
 
-    if st.session_state["location_coords"] and st.session_state["stations"]:
-        st.success(f"Found {len(st.session_state['stations'])} stations near {location}")
-        for s in st.session_state["stations"]:
-            st.write(f"- {s['name']} ({s['distance']:.2f} km away)")
-        show_map(st.session_state["location_coords"], st.session_state["stations"])
+    from_location = st.text_input("Start Location (e.g., Nairobi, Kenya)")
+    to_location = st.text_input("Destination (e.g., Nakuru, Kenya)")
 
-# --------------------------
-# MAIN APP
-# --------------------------
+    if st.button("Calculate Distance"):
+        try:
+            from_coords = geolocator.geocode(from_location)
+            to_coords = geolocator.geocode(to_location)
 
+            if not from_coords or not to_coords:
+                st.error("Could not geocode one of the locations. Please try again.")
+                return
+
+            from_point = (from_coords.latitude, from_coords.longitude)
+            to_point = (to_coords.latitude, to_coords.longitude)
+            distance_km = geodesic(from_point, to_point).km
+
+            st.success(f"The distance between **{from_location}** and **{to_location}** is approximately **{distance_km:.2f} km**.")
+
+            if distance_km > estimated_range:
+                st.warning("⚠️ Your battery may not be sufficient for this trip. Please plan to charge.")
+            else:
+                st.success("✅ You have enough battery range for this journey.")
+
+            # Show route on map
+            route_map = folium.Map(location=from_point, zoom_start=7)
+            folium.Marker(from_point, tooltip="Start: " + from_location).add_to(route_map)
+            folium.Marker(to_point, tooltip="Destination: " + to_location).add_to(route_map)
+            folium.PolyLine([from_point, to_point], color="blue", weight=2.5).add_to(route_map)
+            st_folium(route_map, width=700, height=500)
+
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+# -------------------- Main --------------------
 def main():
-    st.set_page_config(page_title="Twende EV", layout="wide")
-    show_welcome_message()
+    st.set_page_config(page_title="Twende EV Dashboard", layout="centered")
 
-    if "authenticated" in st.session_state and st.session_state["authenticated"]:
-        dashboard()
-    else:
-        tab1, tab2 = st.tabs(["Login", "Register"])
-        with tab1:
+    if 'logged_in' not in st.session_state:
+        st.session_state.logged_in = False
+
+    if not st.session_state.logged_in:
+        menu = ["Login", "Register"]
+        choice = st.sidebar.selectbox("Menu", menu)
+
+        if choice == "Login":
             login()
-        with tab2:
+        elif choice == "Register":
             register()
+    else:
+        st.sidebar.success(f"Logged in as {st.session_state.email}")
+        options = ["Register Vehicle", "Range Estimator", "Logout"]
+        choice = st.sidebar.selectbox("Select Option", options)
 
-if __name__ == "__main__":
+        if choice == "Register Vehicle":
+            register_vehicle()
+        elif choice == "Range Estimator":
+            range_estimator()
+        elif choice == "Logout":
+            st.session_state.logged_in = False
+            st.session_state.user_id = None
+            st.success("You have been logged out.")
+
+if __name__ == '__main__':
     main()
 
 
