@@ -6,29 +6,26 @@ import folium
 from streamlit_folium import st_folium
 
 # -----------------------
-# In-memory user storage
+# User Storage in session_state
 # -----------------------
-users = {}
+if "users" not in st.session_state:
+    st.session_state["users"] = {}
 
 def register_user(email, password):
+    users = st.session_state["users"]
     if email in users:
         return False
-    users[email] = {
-        "password": password,
-        # Placeholder vehicle info, can be updated later
-        "vehicle_type": None,
-        "vehicle_cc": None,
-        "battery_capacity": None,
-        "vehicle_reg": None,
-    }
+    users[email] = {"password": password, "vehicle_info": {}}
+    st.session_state["users"] = users
     return True
 
 def login_user(email, password):
+    users = st.session_state.get("users", {})
     return email in users and users[email]["password"] == password
 
 def logout_user():
     st.session_state["authenticated"] = False
-    st.session_state.pop("email", None)
+    st.session_state["email"] = None
 
 def is_authenticated():
     return st.session_state.get("authenticated", False)
@@ -36,13 +33,12 @@ def is_authenticated():
 # -----------------------
 # EV Station Fetcher
 # -----------------------
-def get_nearest_charging_stations(user_location, max_results=3):
+def get_nearest_charging_stations(user_location, max_results=5):
     api_key = st.secrets["open_charge_map"]["api_key"]
     latitude, longitude = user_location
 
     url = (
-        f"https://api.openchargemap.io/v3/poi/?output=json"
-        f"&latitude={latitude}&longitude={longitude}"
+        f"https://api.openchargemap.io/v3/poi/?output=json&latitude={latitude}&longitude={longitude}"
         f"&distance=20&distanceunit=KM&maxresults=20&key={api_key}"
     )
 
@@ -68,15 +64,29 @@ def get_nearest_charging_stations(user_location, max_results=3):
     return stations[:max_results]
 
 # -----------------------
+# Range Calculator
+# -----------------------
+def calculate_range(battery_capacity_kwh, vehicle_type):
+    # Average consumption rates (kWh per 100 km) by vehicle type (approximate)
+    consumption_rates = {
+        "Motorbike": 3.0,
+        "Car": 15.0,
+        "Tuk-tuk": 6.0,
+    }
+    consumption_rate = consumption_rates.get(vehicle_type, 15.0)  # default 15 if unknown
+    range_km = (battery_capacity_kwh / consumption_rate) * 100
+    return range_km
+
+# -----------------------
 # Map Rendering
 # -----------------------
 def show_map(user_location, stations):
     m = folium.Map(location=user_location, zoom_start=12)
 
-    # Add user location marker
+    # Add user location
     folium.Marker(user_location, tooltip="Your Location", icon=folium.Icon(color='blue')).add_to(m)
 
-    # Add charging station markers
+    # Add station markers
     for station in stations:
         folium.Marker(
             location=[station["latitude"], station["longitude"]],
@@ -87,46 +97,41 @@ def show_map(user_location, stations):
     st_folium(m, width=700)
 
 # -----------------------
-# Default average consumption rates per vehicle type (kWh per 100km)
+# Geocode location name to lat/lon
 # -----------------------
-DEFAULT_CONSUMPTION = {
-    "Electric Car": 20.0,        # average 20 kWh/100km
-    "Electric Motorcycle": 8.0,  # average 8 kWh/100km
-    "Electric Tuk-Tuk": 10.0,    # average 10 kWh/100km
-    "Other": 15.0,
-    None: 15.0,                  # fallback average
-}
+def geocode_location(location_name):
+    geolocator = Nominatim(user_agent="twende_ev_app")
+    try:
+        location = geolocator.geocode(location_name)
+        if location:
+            return (location.latitude, location.longitude)
+    except:
+        pass
+    return None
 
 # -----------------------
-# EV Range Calculator without user input for consumption rate
-# -----------------------
-def calculate_range(battery_capacity, vehicle_type):
-    consumption_rate = DEFAULT_CONSUMPTION.get(vehicle_type, 15.0)
-    if battery_capacity is None or battery_capacity <= 0:
-        return 0
-    estimated_range = (battery_capacity / consumption_rate) * 100  # in km
-    return estimated_range
-
-# -----------------------
-# Login & Welcome Page (combined)
+# Login Page
 # -----------------------
 def login_page():
-    st.title("Welcome to Twende EV")
+    st.title("🔐 Login")
 
-    st.markdown("""
-**Powering the Future of Mobility – One Charge at a Time**
+    st.markdown(
+        """
+        **Welcome to Twende EV**  
+        *Powering the Future of Mobility – One Charge at a Time*
 
-Empower your electric driving experience with real-time insights, intelligent analytics, and seamless control. Twende EV is designed to eliminate range anxiety, optimize charging efficiency, and keep your EV performing at its best—so you can focus on the road ahead.
+        Empower your electric driving experience with real-time insights, intelligent analytics, and seamless control. Twende EV is designed to eliminate range anxiety, optimize charging efficiency, and keep your EV performing at its best—so you can focus on the road ahead.
 
-**Key Benefits:**
-- Smart Charging: No more guesswork—get precise, data-driven charging recommendations.
-- Journey Confidence: Plan routes with real-time battery and station insights.
-- Proactive Maintenance: Stay ahead with alerts and diagnostics tailored to your EV.
+        **Key Benefits:**  
+        - Smart Charging: No more guesswork—get precise, data-driven charging recommendations.  
+        - Journey Confidence: Plan routes with real-time battery and station insights.  
+        - Proactive Maintenance: Stay ahead with alerts and diagnostics tailored to your EV.  
 
-**Drive Smarter. Charge Smarter.**
-
-Log in now to take full command of your electric journey.
-""")
+        Drive Smarter. Charge Smarter.  
+        Log in now to take full command of your electric journey.  
+        Ready to redefine your EV experience? [Get Started]
+        """
+    )
 
     with st.form("login_form"):
         email = st.text_input("Email")
@@ -147,7 +152,7 @@ Log in now to take full command of your electric journey.
         st.experimental_rerun()
 
 # -----------------------
-# Registration Page (email + password only)
+# Registration Page
 # -----------------------
 def register_page():
     st.title("📝 Register")
@@ -171,71 +176,72 @@ def register_page():
         st.experimental_rerun()
 
 # -----------------------
-# Dashboard Page with vehicle info input and range calculation
+# Dashboard Page
 # -----------------------
 def dashboard():
-    st.title("🔋 EV Charging Station Finder")
+    st.title("🔋 Twende EV Charging Station Finder & Range Calculator")
 
     if st.button("Logout"):
         logout_user()
         st.experimental_rerun()
 
-    st.markdown(f"**Logged in as:** {st.session_state.get('email')}")
+    # User info
+    email = st.session_state.get("email")
+    user = st.session_state["users"].get(email, {})
 
-    user = users.get(st.session_state.get("email"), {})
+    st.markdown(f"**Logged in as:** {email}")
 
-    # Collect or update vehicle details here
-    with st.expander("Update Vehicle Details (Optional)"):
-        vehicle_type = st.selectbox(
-            "Vehicle Type",
-            ["Electric Car", "Electric Motorcycle", "Electric Tuk-Tuk", "Other"],
-            index=["Electric Car", "Electric Motorcycle", "Electric Tuk-Tuk", "Other"].index(user.get("vehicle_type", "Electric Car")) if user.get("vehicle_type") else 0,
-        )
-        battery_capacity = st.number_input(
-            "Battery Capacity (kWh)",
-            min_value=0.0,
-            format="%.2f",
-            value=user.get("battery_capacity") if user.get("battery_capacity") else 0.0
-        )
-        vehicle_reg = st.text_input("Vehicle Registration Number", value=user.get("vehicle_reg", ""))
+    # Vehicle details input
+    st.markdown("### 🚗 Enter your vehicle details")
 
-        # Save changes button
-        if st.button("Save Vehicle Details"):
-            user["vehicle_type"] = vehicle_type
-            user["battery_capacity"] = battery_capacity
-            user["vehicle_reg"] = vehicle_reg
-            st.success("Vehicle details updated.")
+    vehicle_type = st.selectbox("Vehicle Type", ["Motorbike", "Car", "Tuk-tuk"])
+    vehicle_cc = st.text_input("Engine CC (e.g., 150)")
+    battery_capacity = st.number_input("Battery Capacity (kWh)", min_value=0.1, max_value=200.0, step=0.1, value=10.0)
+    vehicle_reg = st.text_input("Vehicle Registration Number")
 
-    # Calculate range if battery_capacity provided
-    if user.get("battery_capacity") and user.get("battery_capacity") > 0:
-        ev_range = calculate_range(user.get("battery_capacity"), user.get("vehicle_type"))
-        st.markdown(f"**Estimated EV Range:** {ev_range:.1f} km (based on typical consumption for your vehicle type)")
+    # Save vehicle info in session_state users dictionary on submit
+    if st.button("Save Vehicle Details"):
+        user["vehicle_info"] = {
+            "vehicle_type": vehicle_type,
+            "vehicle_cc": vehicle_cc,
+            "battery_capacity": battery_capacity,
+            "vehicle_reg": vehicle_reg,
+        }
+        st.session_state["users"][email] = user
+        st.success("Vehicle details saved!")
 
-    # Location input by place name
-    location_name = st.text_input("Enter your location (e.g., city or address)", value="Nairobi")
+    # Location input by name
+    st.markdown("### 📍 Enter your location (city, address, or place name)")
+    location_name = st.text_input("Location")
 
-    if st.button("Find Nearest Stations"):
-        if not location_name.strip():
-            st.error("Please enter a valid location name.")
+    if st.button("Find Nearest Stations & Calculate Range"):
+        if not location_name:
+            st.error("Please enter a location name.")
             return
 
-        geolocator = Nominatim(user_agent="twende_ev_app")
-        location = geolocator.geocode(location_name)
-        if location is None:
-            st.error("Location not found. Please enter a valid location name.")
+        coords = geocode_location(location_name)
+        if coords is None:
+            st.error("Could not find the location. Please enter a valid place name.")
             return
 
-        user_location = (location.latitude, location.longitude)
-        stations = get_nearest_charging_stations(user_location)
+        stations = get_nearest_charging_stations(coords)
 
         if stations:
             st.success(f"Found {len(stations)} nearby stations:")
             for s in stations:
                 st.write(f"- {s['name']} ({s['distance']:.2f} km)")
 
-            show_map(user_location, stations)
+            show_map(coords, stations)
         else:
             st.warning("No charging stations found nearby.")
+
+        # Calculate and show range if vehicle info is available
+        vehicle_info = user.get("vehicle_info", {})
+        if vehicle_info:
+            range_km = calculate_range(vehicle_info.get("battery_capacity", 0), vehicle_info.get("vehicle_type", "Car"))
+            st.markdown(f"### Estimated Range: **{range_km:.1f} km** based on your vehicle's battery capacity and type.")
+        else:
+            st.info("Please save your vehicle details to see estimated range.")
 
 # -----------------------
 # App Entry Point
@@ -247,6 +253,8 @@ def main():
         st.session_state["authenticated"] = False
     if "show_register" not in st.session_state:
         st.session_state["show_register"] = False
+    if "email" not in st.session_state:
+        st.session_state["email"] = None
 
     if is_authenticated():
         dashboard()
@@ -257,6 +265,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
