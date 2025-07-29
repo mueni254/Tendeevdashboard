@@ -5,7 +5,6 @@ import folium
 from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 from math import radians, cos, sin, asin, sqrt
-from streamlit_extras.let_it_rain import rain
 from streamlit.components.v1 import html
 import openchargemap
 import plotly.graph_objects as go
