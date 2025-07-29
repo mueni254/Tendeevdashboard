@@ -6,15 +6,12 @@ from streamlit_folium import st_folium
 from geopy.distance import geodesic
 import requests
 import hashlib
-import datetime
-import os
 
 # -------------------------------
 # CONFIG
 # -------------------------------
 MAPBOX_API_KEY = st.secrets["mapbox"]["api_key"]
 OPENCHARGEMAP_API_KEY = st.secrets["open_charge_map"]["api_key"]
-
 
 # -------------------------------
 # DATABASE SETUP
@@ -66,7 +63,7 @@ def register():
         try:
             create_user(email, password)
             st.success("Account created. Please log in.")
-        except:
+        except sqlite3.IntegrityError:
             st.error("User already exists.")
 
 def login():
@@ -86,6 +83,11 @@ def logout():
     if st.button("Logout"):
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
+        # Clear station info on logout
+        if "stations" in st.session_state:
+            del st.session_state["stations"]
+        if "user_location" in st.session_state:
+            del st.session_state["user_location"]
 
 # -------------------------------
 # RANGE ESTIMATION
@@ -109,41 +111,58 @@ def estimate_range():
 # NEAREST STATION LOCATOR
 # -------------------------------
 def nearest_station_locator():
-    st.subheader("Find Nearest Charging Station")
+    st.subheader("Find Nearest Charging Stations")
     location_query = st.text_input("Enter your location (e.g. Nairobi, KE)")
-    if st.button("Search Station"):
+
+    if st.button("Search Stations"):
+        if not location_query.strip():
+            st.error("Please enter a valid location.")
+            return
+        
         geocode_url = f"https://api.mapbox.com/geocoding/v5/mapbox.places/{location_query}.json?access_token={MAPBOX_API_KEY}"
         response = requests.get(geocode_url)
         if response.status_code == 200:
-            features = response.json()["features"]
+            features = response.json().get("features", [])
             if features:
                 lat, lon = features[0]["center"][1], features[0]["center"][0]
-                show_charging_map(lat, lon)
+                # Fetch stations from OpenChargeMap
+                url = f"https://api.openchargemap.io/v3/poi/?output=json&latitude={lat}&longitude={lon}&distance=20&maxresults=10&key={OPENCHARGEMAP_API_KEY}"
+                station_response = requests.get(url)
+                if station_response.status_code == 200:
+                    stations = station_response.json()
+                    st.session_state["stations"] = stations
+                    st.session_state["user_location"] = (lat, lon)
+                else:
+                    st.error("Failed to fetch stations from OpenChargeMap.")
             else:
                 st.warning("Location not found.")
         else:
             st.error("Mapbox API error.")
 
-
-def show_charging_map(lat, lon):
-    url = f"https://api.openchargemap.io/v3/poi/?output=json&latitude={lat}&longitude={lon}&distance=20&maxresults=10&key={OPENCHARGEMAP_API_KEY}"
-    response = requests.get(url)
-    data = response.json()
-
-    m = folium.Map(location=[lat, lon], zoom_start=12)
-    marker_cluster = MarkerCluster().add_to(m)
-
-    for station in data:
-        try:
-            name = station["AddressInfo"]["Title"]
-            address = station["AddressInfo"].get("AddressLine1", "")
-            s_lat = station["AddressInfo"]["Latitude"]
-            s_lon = station["AddressInfo"]["Longitude"]
-            folium.Marker([s_lat, s_lon], tooltip=f"{name}\n{address}").add_to(marker_cluster)
-        except:
-            continue
-
-    st_folium(m, width=700, height=500)
+    # Render map and stations if they exist in session_state
+    if "stations" in st.session_state and "user_location" in st.session_state:
+        lat, lon = st.session_state["user_location"]
+        m = folium.Map(location=[lat, lon], zoom_start=12)
+        marker_cluster = MarkerCluster().add_to(m)
+        for station in st.session_state["stations"]:
+            try:
+                info = station["AddressInfo"]
+                name = info.get("Title", "Unknown")
+                s_lat = info["Latitude"]
+                s_lon = info["Longitude"]
+                points = station.get("NumberOfPoints", "N/A")
+                connections = station.get("Connections", [])
+                # Build popup text with point and type info
+                conn_info = []
+                for conn in connections:
+                    ctype = conn.get("ConnectionType", {}).get("Title", "Unknown")
+                    status = conn.get("StatusType", {}).get("Title", "Unknown")
+                    conn_info.append(f"{ctype} ({status})")
+                popup_text = f"<b>{name}</b><br>Points: {points}<br>Connectors:<br>" + "<br>".join(conn_info)
+                folium.Marker([s_lat, s_lon], popup=popup_text).add_to(marker_cluster)
+            except Exception:
+                continue
+        st_folium(m, width=700, height=500)
 
 # -------------------------------
 # MAIN
@@ -160,6 +179,7 @@ def main():
         logout()
         st.title("Twende EV Dashboard")
         estimate_range()
+        st.markdown("---")
         nearest_station_locator()
 
     else:
@@ -172,8 +192,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
-
-
