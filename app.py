@@ -6,6 +6,9 @@ from geopy.distance import geodesic
 import requests
 import hashlib
 
+# Import chatbot from chatbot.py
+from chatbot import chatbot_assistant
+
 # -------------------------------
 # CONFIG
 # -------------------------------
@@ -164,6 +167,16 @@ def nearest_station_locator():
             st.error("Mapbox API error.")
 
 # -------------------------------
+# CHATBOT FEATURE
+# -------------------------------
+def show_chatbot():
+    st.subheader("EV Assistant Chatbot")
+    user_input = st.text_input("Ask me anything about your EV, charging, or routes:", key="chat_input")
+    if user_input:
+        reply = chatbot_assistant(user_input)
+        st.markdown(f"**Assistant:** {reply}")
+
+# -------------------------------
 # MAIN
 # -------------------------------
 def main():
@@ -176,9 +189,18 @@ def main():
     if st.session_state["logged_in"]:
         st.sidebar.markdown(f"**Logged in as:** {st.session_state['user']}")
         logout()
+
+        # Add menu for features
+        page = st.sidebar.selectbox("Select Feature", ["Range Estimator", "Nearest Charging Stations", "Chatbot"])
+
         st.title("Twende EV Dashboard")
-        estimate_range()
-        nearest_station_locator()
+
+        if page == "Range Estimator":
+            estimate_range()
+        elif page == "Nearest Charging Stations":
+            nearest_station_locator()
+        elif page == "Chatbot":
+            show_chatbot()
 
     else:
         welcome()
@@ -190,4 +212,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
