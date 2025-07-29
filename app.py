@@ -12,8 +12,9 @@ import os
 # -------------------------------
 # CONFIG
 # -------------------------------
-OPENCHARGEMAP_API_KEY = st.secrets["openchargemap_api_key"]
-MAPBOX_API_KEY = st.secrets["mapbox_api_key"]
+MAPBOX_API_KEY = st.secrets["mapbox"]["api_key"]
+OPENCHARGEMAP_API_KEY = st.secrets["open_charge_map"]["api_key"]
+
 
 # -------------------------------
 # DATABASE SETUP
