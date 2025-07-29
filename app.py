@@ -1,202 +1,173 @@
 import streamlit as st
 import sqlite3
-import hashlib
 import folium
+from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
-from geopy.geocoders import Nominatim
-from math import radians, cos, sin, asin, sqrt
-from streamlit.components.v1 import html
-import openchargemap
-import plotly.graph_objects as go
+from geopy.distance import geodesic
+import requests
+import hashlib
+import datetime
+import os
 
-# ----------------------- DATABASE FUNCTIONS -----------------------
+# -------------------------------
+# CONFIG
+# -------------------------------
+OPENCHARGEMAP_API_KEY = st.secrets["openchargemap_api_key"]
+MAPBOX_API_KEY = st.secrets["mapbox_api_key"]
 
-def create_usertable():
-    conn = sqlite3.connect("data.db")
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users(email TEXT, password TEXT)''')
+# -------------------------------
+# DATABASE SETUP
+# -------------------------------
+conn = sqlite3.connect("users.db", check_same_thread=False)
+c = conn.cursor()
+c.execute('''CREATE TABLE IF NOT EXISTS users (email TEXT PRIMARY KEY, password TEXT)''')
+
+# -------------------------------
+# AUTHENTICATION HELPERS
+# -------------------------------
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def check_credentials(email, password):
+    c.execute("SELECT * FROM users WHERE email=? AND password=?", (email, hash_password(password)))
+    return c.fetchone()
+
+def create_user(email, password):
+    c.execute("INSERT INTO users (email, password) VALUES (?, ?)", (email, hash_password(password)))
     conn.commit()
-    conn.close()
 
-def add_userdata(email, password):
-    conn = sqlite3.connect("data.db")
-    c = conn.cursor()
-    c.execute('INSERT INTO users(email, password) VALUES (?, ?)', (email, password))
-    conn.commit()
-    conn.close()
+# -------------------------------
+# UI SECTIONS
+# -------------------------------
 
-def login_user(email, password):
-    conn = sqlite3.connect("data.db")
-    c = conn.cursor()
-    c.execute('SELECT * FROM users WHERE email =? AND password = ?', (email, password))
-    data = c.fetchall()
-    conn.close()
-    return data
+def welcome():
+    st.markdown("""
+    # Welcome to Twende EV
+    ### Powering the Future of Mobility – One Charge at a Time
 
-# ----------------------- HASHING -----------------------
+    Empower your electric driving experience with real-time insights, intelligent analytics, and seamless control.
 
-def make_hashes(password):
-    return hashlib.sha256(str.encode(password)).hexdigest()
+    **Key Benefits:**
+    - 🚀 Smart Charging: No more guesswork—get precise, data-driven charging recommendations.
+    - 🚗 Journey Confidence: Plan routes with real-time battery and station insights.
+    - ⚡ Proactive Maintenance: Stay ahead with alerts and diagnostics tailored to your EV.
 
-def check_hashes(password, hashed_text):
-    return make_hashes(password) == hashed_text
-
-# ----------------------- GEOCODING AND DISTANCE -----------------------
-
-def geocode(place_name):
-    geolocator = Nominatim(user_agent="twende_ev")
-    location = geolocator.geocode(place_name)
-    if location:
-        return location.latitude, location.longitude
-    return None, None
-
-def haversine(lat1, lon1, lat2, lon2):
-    R = 6371  # Radius of Earth in km
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
-    c = 2 * asin(sqrt(a))
-    return R * c
-
-# ----------------------- STATIONS -----------------------
-charging_stations = {
-    "Nairobi CBD": ( -1.286389, 36.817223),
-    "Westlands": (-1.2676, 36.8110),
-    "Kilimani": (-1.3003, 36.7831),
-    "Karen": (-1.3202, 36.7205),
-    "Thika": (-1.0333, 37.0707),
-    "Juja": (-1.1019, 37.0144)
-}
-
-# ----------------------- APP FUNCTIONS -----------------------
+    **Drive Smarter. Charge Smarter.**
+    
+    Log in now to take full command of your electric journey.
+    """)
 
 def register():
-    st.subheader("Create a New Account")
+    st.subheader("Create an Account")
     email = st.text_input("Email", key="reg_email")
-    password = st.text_input("Password", type='password', key="reg_password")
+    password = st.text_input("Password", type="password", key="reg_pass")
     if st.button("Register"):
-        create_usertable()
-        hashed_pw = make_hashes(password)
-        add_userdata(email, hashed_pw)
-        st.success("Account created successfully. Please log in.")
+        try:
+            create_user(email, password)
+            st.success("Account created. Please log in.")
+        except:
+            st.error("User already exists.")
 
 def login():
-    st.subheader("Log In")
+    st.subheader("Login")
     email = st.text_input("Email", key="login_email")
-    password = st.text_input("Password", type='password', key="login_password")
-    if st.button("Log In"):
-        create_usertable()
-        hashed_pw = make_hashes(password)
-        result = login_user(email, hashed_pw)
-        if result:
-            st.session_state.logged_in = True
-            st.session_state.email = email
+    password = st.text_input("Password", type="password", key="login_pass")
+    if st.button("Login"):
+        user = check_credentials(email, password)
+        if user:
+            st.session_state["logged_in"] = True
+            st.session_state["user"] = email
             st.success("Logged in successfully")
         else:
             st.error("Invalid email or password")
 
-# ----------------------- RANGE ESTIMATION -----------------------
+def logout():
+    if st.button("Logout"):
+        st.session_state["logged_in"] = False
+        st.session_state["user"] = None
 
-def gauge_chart(range_km):
-    fig = go.Figure(go.Indicator(
-        mode = "gauge+number",
-        value = range_km,
-        title = {'text': "Estimated Range (km)"},
-        gauge = {
-            'axis': {'range': [0, 500]},
-            'bar': {'color': "green"},
-            'steps': [
-                {'range': [0, 200], 'color': "red"},
-                {'range': [200, 400], 'color': "orange"},
-                {'range': [400, 500], 'color': "lightgreen"},
-            ]
-        }))
-    st.plotly_chart(fig)
-
-def range_estimator():
-    st.subheader("🔋 EV Range Estimator")
-
+# -------------------------------
+# RANGE ESTIMATION
+# -------------------------------
+def estimate_range():
+    st.subheader("Range Estimator")
     vehicle_type = st.selectbox("Vehicle Type", ["Car", "Van", "Bike", "Bus", "Truck"])
-    battery_age = st.slider("Battery Age (in years)", 0, 10, 2)
-    battery_charge = st.slider("Battery Charge Remaining (%)", 0, 100, 80)
+    battery_capacity = st.number_input("Battery Capacity (kWh)", min_value=10.0, value=60.0)
+    battery_age = st.slider("Battery Age (years)", 0, 10, 2)
+    charge_percentage = st.slider("Current Battery %", 0, 100, 80)
 
-    base_range = {
-        "Car": 400,
-        "Van": 350,
-        "Bike": 150,
-        "Bus": 300,
-        "Truck": 250
-    }[vehicle_type]
+    age_factor = 1 - (battery_age * 0.02)  # 2% loss per year
+    usable_capacity = battery_capacity * (charge_percentage / 100) * age_factor
 
-    age_factor = 1 - (battery_age * 0.02)
-    final_range = base_range * (battery_charge / 100) * age_factor
+    estimated_efficiency = 0.18  # kWh/km assumed average
+    estimated_range = usable_capacity / estimated_efficiency
 
-    st.info(f"Estimated Remaining Range: {final_range:.2f} km")
-    gauge_chart(final_range)
+    st.success(f"Estimated Range: {estimated_range:.1f} km")
 
-# ----------------------- CHARGING STATIONS -----------------------
-
-def charging_station_locator():
-    st.subheader("📍 Find Nearest Charging Stations")
-    user_location = st.text_input("Enter your current location (e.g. Westlands, Karen)", key="user_location")
-
-    if user_location:
-        user_lat, user_lon = geocode(user_location)
-        if user_lat is not None:
-            sorted_stations = sorted(
-                charging_stations.items(),
-                key=lambda x: haversine(user_lat, user_lon, x[1][0], x[1][1])
-            )[:3]
-
-            st.success("Top 3 nearest stations:")
-            for name, (lat, lon) in sorted_stations:
-                dist = haversine(user_lat, user_lon, lat, lon)
-                st.write(f"{name}: {dist:.2f} km")
-
-            m = folium.Map(location=[user_lat, user_lon], zoom_start=12)
-            folium.Marker([user_lat, user_lon], tooltip="Your Location", icon=folium.Icon(color='blue')).add_to(m)
-            for name, (lat, lon) in charging_stations.items():
-                folium.Marker([lat, lon], tooltip=name, icon=folium.Icon(color='green')).add_to(m)
-            st_folium(m, width=700)
+# -------------------------------
+# NEAREST STATION LOCATOR
+# -------------------------------
+def nearest_station_locator():
+    st.subheader("Find Nearest Charging Station")
+    location_query = st.text_input("Enter your location (e.g. Nairobi, KE)")
+    if st.button("Search Station"):
+        geocode_url = f"https://api.mapbox.com/geocoding/v5/mapbox.places/{location_query}.json?access_token={MAPBOX_API_KEY}"
+        response = requests.get(geocode_url)
+        if response.status_code == 200:
+            features = response.json()["features"]
+            if features:
+                lat, lon = features[0]["center"][1], features[0]["center"][0]
+                show_charging_map(lat, lon)
+            else:
+                st.warning("Location not found.")
         else:
-            st.error("Could not find location. Please enter a recognizable place name.")
+            st.error("Mapbox API error.")
 
-# ----------------------- MAIN -----------------------
 
+def show_charging_map(lat, lon):
+    url = f"https://api.openchargemap.io/v3/poi/?output=json&latitude={lat}&longitude={lon}&distance=20&maxresults=10&key={OPENCHARGEMAP_API_KEY}"
+    response = requests.get(url)
+    data = response.json()
+
+    m = folium.Map(location=[lat, lon], zoom_start=12)
+    marker_cluster = MarkerCluster().add_to(m)
+
+    for station in data:
+        try:
+            name = station["AddressInfo"]["Title"]
+            address = station["AddressInfo"].get("AddressLine1", "")
+            s_lat = station["AddressInfo"]["Latitude"]
+            s_lon = station["AddressInfo"]["Longitude"]
+            folium.Marker([s_lat, s_lon], tooltip=f"{name}\n{address}").add_to(marker_cluster)
+        except:
+            continue
+
+    st_folium(m, width=700, height=500)
+
+# -------------------------------
+# MAIN
+# -------------------------------
 def main():
     st.set_page_config(page_title="Twende EV Dashboard", layout="wide")
 
-    st.markdown("""
-    <div style='text-align: center; padding: 20px;'>
-        <h1>Welcome to Twende EV</h1>
-        <h3>Powering the Future of Mobility – One Charge at a Time</h3>
-        <p>Empower your electric driving experience with real-time insights, intelligent analytics, and seamless control.<br>
-        Twende EV is designed to eliminate range anxiety, optimize charging efficiency, and keep your EV performing at its best.</p>
-        <ul style='text-align: left;'>
-            <li><b>Smart Charging:</b> No more guesswork—get precise, data-driven charging recommendations.</li>
-            <li><b>Journey Confidence:</b> Plan routes with real-time battery and station insights.</li>
-            <li><b>Proactive Maintenance:</b> Stay ahead with alerts and diagnostics tailored to your EV.</li>
-        </ul>
-        <p><b>Drive Smarter. Charge Smarter.</b><br>Log in now to take full command of your electric journey.</p>
-        <hr>
-    </div>
-    """, unsafe_allow_html=True)
-
     if "logged_in" not in st.session_state:
-        st.session_state.logged_in = False
+        st.session_state["logged_in"] = False
+        st.session_state["user"] = None
 
-    if not st.session_state.logged_in:
-        option = st.sidebar.radio("Choose Option", ["Login", "Register"])
-        if option == "Login":
+    if st.session_state["logged_in"]:
+        st.sidebar.markdown(f"**Logged in as:** {st.session_state['user']}")
+        logout()
+        st.title("Twende EV Dashboard")
+        estimate_range()
+        nearest_station_locator()
+
+    else:
+        welcome()
+        choice = st.selectbox("Choose Action", ["Login", "Register"])
+        if choice == "Login":
             login()
         else:
             register()
-    else:
-        menu = st.sidebar.radio("Main Menu", ["Range Estimator", "Charging Stations"])
-        if menu == "Range Estimator":
-            range_estimator()
-        elif menu == "Charging Stations":
-            charging_station_locator()
 
 if __name__ == '__main__':
     main()
