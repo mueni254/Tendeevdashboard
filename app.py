@@ -10,7 +10,7 @@ import hashlib
 import os
 
 # Load model
-model = joblib.load("range_estimator_model.pkl")
+model = joblib.load("ev_range_model.pkl")
 
 # Auth DB setup
 conn = sqlite3.connect('users.db', check_same_thread=False)
