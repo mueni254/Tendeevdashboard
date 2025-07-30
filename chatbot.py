@@ -1,13 +1,12 @@
-# chatbot.py
 import requests
 import streamlit as st
 
 GROQ_API_KEY = st.secrets["groq"]["api_key"]
 
 def chatbot_assistant(user_message):
-    url = "https://api.groq.com/v1/chat/completions"
+    url = "https://api.groq.com/v1/chat/completions"  # Correct chat completions endpoint
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {GROQ_API_KEY}",  # Use your API key here
         "Content-Type": "application/json"
     }
     data = {
@@ -24,4 +23,5 @@ def chatbot_assistant(user_message):
         return reply
     except Exception as e:
         return f"Sorry, I couldn't get a response. Error: {str(e)}"
+
 
