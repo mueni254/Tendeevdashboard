@@ -2,8 +2,10 @@ import streamlit as st
 import requests
 import joblib
 import folium
+import pandas as pd
 from streamlit_folium import st_folium
 from geopy.distance import geodesic
+from geopy.geocoders import Nominatim
 from chatbot import chatbot_response
 import sqlite3
 import hashlib
@@ -51,7 +53,7 @@ def fetch_weather(city="Nairobi"):
 
 # Predict EV range
 def predict_range(inputs):
-    df = [inputs]
+    df = pd.DataFrame([inputs])  # <-- FIXED: wrap input in DataFrame
     prediction = model.predict(df)
     return round(prediction[0], 2)
 
@@ -82,9 +84,19 @@ def get_nearest_stations(lat, lon):
     except:
         return []
 
+# Geocode city to lat/lon
+def geocode_location(city):
+    geolocator = Nominatim(user_agent="ev_dashboard")
+    location = geolocator.geocode(city)
+    if location:
+        return location.latitude, location.longitude
+    return None, None
+
 # App UI
 def main():
     st.set_page_config("EV Smart Dashboard", layout="wide")
+    st.markdown("<h1 style='text-align: center; color: green;'>🌍 TWENDE EV: Your Smart Electric Journey Starts Here!</h1>", unsafe_allow_html=True)
+
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
 
@@ -128,8 +140,8 @@ def main():
             battery_years = st.slider("Battery Age (years)", 0, 10, 2)
             battery_volts = st.slider("Battery Voltage (V)", 200, 800, 400)
             battery_percent = st.slider("Battery Charge (%)", 0, 100, 80)
-
             city = st.text_input("City for Weather Data", "Nairobi")
+
             submitted = st.form_submit_button("Estimate Range")
 
             if submitted:
@@ -148,20 +160,23 @@ def main():
 
     elif page == "Charging Stations":
         st.title("📍 Locate Nearby Charging Stations")
-        lat = st.number_input("Enter your latitude", value=-1.2921)
-        lon = st.number_input("Enter your longitude", value=36.8219)
+        city = st.text_input("Enter your location (e.g. Nairobi, Kisumu)", "Nairobi")
         if st.button("Find Stations"):
-            nearest = get_nearest_stations(lat, lon)
-            if not nearest:
-                st.warning("No stations found.")
+            lat, lon = geocode_location(city)
+            if lat is None:
+                st.error("Could not locate that place.")
             else:
-                m = folium.Map(location=[lat, lon], zoom_start=12)
-                folium.Marker([lat, lon], tooltip="Your Location", icon=folium.Icon(color='green')).add_to(m)
-                for s in nearest:
-                    folium.Marker([s["lat"], s["lon"]],
-                                  tooltip=f'{s["name"]} ({s["distance"]:.2f} km)',
-                                  icon=folium.Icon(color='blue')).add_to(m)
-                st_folium(m, width=700)
+                nearest = get_nearest_stations(lat, lon)
+                if not nearest:
+                    st.warning("No stations found.")
+                else:
+                    m = folium.Map(location=[lat, lon], zoom_start=12)
+                    folium.Marker([lat, lon], tooltip="Your Location", icon=folium.Icon(color='green')).add_to(m)
+                    for s in nearest:
+                        folium.Marker([s["lat"], s["lon"]],
+                                      tooltip=f'{s["name"]} ({s["distance"]:.2f} km)',
+                                      icon=folium.Icon(color='blue')).add_to(m)
+                    st_folium(m, width=700)
 
     elif page == "Chatbot":
         st.title("💬 EV Assistant")
@@ -179,4 +194,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
