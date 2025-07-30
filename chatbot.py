@@ -5,7 +5,7 @@ import streamlit as st
 GROQ_API_KEY = st.secrets["groq"]["api_key"]
 
 def chatbot_assistant(user_message):
-    url = "https://api.groq.com/v1/chat/completions"
+    url = "https://api.groq.com/v1/models/{model_id}/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
