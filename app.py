@@ -1,214 +1,182 @@
 import streamlit as st
-import sqlite3
+import requests
+import joblib
 import folium
 from streamlit_folium import st_folium
 from geopy.distance import geodesic
-import requests
+from chatbot import chatbot_response
+import sqlite3
 import hashlib
+import os
 
-# Import chatbot from chatbot.py
-from chatbot import chatbot_assistant
+# Load model
+model = joblib.load("range_estimator_model.pkl")
 
-# -------------------------------
-# CONFIG
-# -------------------------------
-MAPBOX_API_KEY = st.secrets["mapbox"]["api_key"]
-OPENCHARGEMAP_API_KEY = st.secrets["open_charge_map"]["api_key"]
-
-# -------------------------------
-# DATABASE SETUP
-# -------------------------------
-conn = sqlite3.connect("users.db", check_same_thread=False)
+# Auth DB setup
+conn = sqlite3.connect('users.db', check_same_thread=False)
 c = conn.cursor()
-c.execute('''CREATE TABLE IF NOT EXISTS users (email TEXT PRIMARY KEY, password TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT, password TEXT)''')
+conn.commit()
 
-# -------------------------------
-# AUTHENTICATION HELPERS
-# -------------------------------
+# Utility: hash password
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-def check_credentials(email, password):
-    c.execute("SELECT * FROM users WHERE email=? AND password=?", (email, hash_password(password)))
+# Utility: verify login
+def login_user(username, password):
+    c.execute('SELECT * FROM users WHERE username=? AND password=?',
+              (username, hash_password(password)))
     return c.fetchone()
 
-def create_user(email, password):
-    c.execute("INSERT INTO users (email, password) VALUES (?, ?)", (email, hash_password(password)))
+# Utility: register user
+def register_user(username, password):
+    c.execute('INSERT INTO users (username, password) VALUES (?, ?)',
+              (username, hash_password(password)))
     conn.commit()
 
-# -------------------------------
-# UI SECTIONS
-# -------------------------------
+# Fetch weather
+def fetch_weather(city="Nairobi"):
+    try:
+        api_key = st.secrets["OPENWEATHER_API_KEY"]
+        url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
+        response = requests.get(url)
+        data = response.json()
+        return {
+            "temperature_C": data["main"]["temp"],
+            "humidity_percent": data["main"]["humidity"],
+            "wind_speed_mps": data["wind"]["speed"]
+        }
+    except:
+        return {"temperature_C": 25, "humidity_percent": 50, "wind_speed_mps": 2}
 
-def welcome():
-    st.markdown("""
-    # Welcome to Twende EV
-    ### Powering the Future of Mobility – One Charge at a Time
+# Predict EV range
+def predict_range(inputs):
+    df = [inputs]
+    prediction = model.predict(df)
+    return round(prediction[0], 2)
 
-    Empower your electric driving experience with real-time insights, intelligent analytics, and seamless control.
+# Charging station lookup
+def get_nearest_stations(lat, lon):
+    api_url = f"https://api.openchargemap.io/v3/poi/?output=json&countrycode=KE&latitude={lat}&longitude={lon}&maxresults=10&compact=true"
+    headers = {'X-API-Key': st.secrets["OPENCHARGEMAP_API_KEY"]}
+    try:
+        response = requests.get(api_url, headers=headers)
+        data = response.json()
+        stations = []
+        for station in data:
+            try:
+                title = station["AddressInfo"]["Title"]
+                slat = station["AddressInfo"]["Latitude"]
+                slon = station["AddressInfo"]["Longitude"]
+                distance = geodesic((lat, lon), (slat, slon)).km
+                stations.append({
+                    "name": title,
+                    "lat": slat,
+                    "lon": slon,
+                    "distance": distance
+                })
+            except:
+                continue
+        sorted_stations = sorted(stations, key=lambda x: x["distance"])
+        return sorted_stations[:5]
+    except:
+        return []
 
-    **Key Benefits:**
-    - 🚀 Smart Charging: No more guesswork—get precise, data-driven charging recommendations.
-    - 🚗 Journey Confidence: Plan routes with real-time battery and station insights.
-    - ⚡ Proactive Maintenance: Stay ahead with alerts and diagnostics tailored to your EV.
-
-    **Drive Smarter. Charge Smarter.**
-    
-    Log in now to take full command of your electric journey.
-    """)
-
-def register():
-    st.subheader("Create an Account")
-    email = st.text_input("Email", key="reg_email")
-    password = st.text_input("Password", type="password", key="reg_pass")
-    if st.button("Register"):
-        try:
-            create_user(email, password)
-            st.success("Account created. Please log in.")
-        except:
-            st.error("User already exists.")
-
-def login():
-    st.subheader("Login")
-    email = st.text_input("Email", key="login_email")
-    password = st.text_input("Password", type="password", key="login_pass")
-    if st.button("Login"):
-        user = check_credentials(email, password)
-        if user:
-            st.session_state["logged_in"] = True
-            st.session_state["user"] = email
-            st.success("Logged in successfully")
-        else:
-            st.error("Invalid email or password")
-
-def logout():
-    if st.button("Logout"):
-        st.session_state["logged_in"] = False
-        st.session_state["user"] = None
-
-# -------------------------------
-# RANGE ESTIMATION
-# -------------------------------
-def estimate_range():
-    st.subheader("Range Estimator")
-    vehicle_type = st.selectbox("Vehicle Type", ["Car", "Van", "Bike", "Bus", "Truck"])
-    battery_capacity = st.number_input("Battery Capacity (kWh)", min_value=10.0, value=60.0)
-    battery_age = st.slider("Battery Age (years)", 0, 10, 2)
-    charge_percentage = st.slider("Current Battery %", 0, 100, 80)
-
-    age_factor = 1 - (battery_age * 0.02)  # 2% loss per year
-    usable_capacity = battery_capacity * (charge_percentage / 100) * age_factor
-
-    estimated_efficiency = 0.18  # kWh/km assumed average
-    estimated_range = usable_capacity / estimated_efficiency
-
-    st.success(f"Estimated Range: {estimated_range:.1f} km")
-
-# -------------------------------
-# NEAREST STATION LOCATOR (No Map)
-# -------------------------------
-def show_nearest_stations_list(lat, lon):
-    url = f"https://api.openchargemap.io/v3/poi/?output=json&latitude={lat}&longitude={lon}&distance=20&maxresults=10&key={OPENCHARGEMAP_API_KEY}"
-    response = requests.get(url)
-    data = response.json()
-
-    stations = []
-    for station in data:
-        try:
-            name = station["AddressInfo"]["Title"]
-            s_lat = station["AddressInfo"]["Latitude"]
-            s_lon = station["AddressInfo"]["Longitude"]
-            distance = geodesic((lat, lon), (s_lat, s_lon)).km
-            
-            connections = station.get("Connections", [])
-            num_points = len(connections)
-            details = []
-            for c in connections:
-                conn_type = c.get("ConnectionType", {}).get("Title", "Unknown")
-                status = c.get("StatusType", {}).get("Title", "Unknown")
-                details.append(f"{conn_type} ({status})")
-            
-            stations.append({
-                "name": name,
-                "distance": distance,
-                "num_points": num_points,
-                "details": details
-            })
-        except Exception:
-            continue
-
-    stations = sorted(stations, key=lambda x: x["distance"])
-
-    if stations:
-        st.subheader("Nearest Charging Stations:")
-        for i, s in enumerate(stations[:5], start=1):
-            st.markdown(
-                f"**{i}. {s['name']}** — {s['distance']:.2f} km away\n"
-                f"- Charging Points: {s['num_points']}\n"
-                f"- Connections: {', '.join(s['details'])}"
-            )
-    else:
-        st.warning("No charging stations found nearby.")
-
-def nearest_station_locator():
-    st.subheader("Find Nearest Charging Stations")
-    location_query = st.text_input("Enter your location (e.g. Nairobi, KE)")
-    if st.button("Search Station"):
-        geocode_url = f"https://api.mapbox.com/geocoding/v5/mapbox.places/{location_query}.json?access_token={MAPBOX_API_KEY}"
-        response = requests.get(geocode_url)
-        if response.status_code == 200:
-            features = response.json()["features"]
-            if features:
-                lat, lon = features[0]["center"][1], features[0]["center"][0]
-                show_nearest_stations_list(lat, lon)
-            else:
-                st.warning("Location not found.")
-        else:
-            st.error("Mapbox API error.")
-
-# -------------------------------
-# CHATBOT FEATURE
-# -------------------------------
-def show_chatbot():
-    st.subheader("EV Assistant Chatbot")
-    user_input = st.text_input("Ask me anything about your EV, charging, or routes:", key="chat_input")
-    if user_input:
-        reply = chatbot_assistant(user_input)
-        st.markdown(f"**Assistant:** {reply}")
-
-# -------------------------------
-# MAIN
-# -------------------------------
+# App UI
 def main():
-    st.set_page_config(page_title="Twende EV Dashboard", layout="wide")
-
+    st.set_page_config("EV Smart Dashboard", layout="wide")
     if "logged_in" not in st.session_state:
-        st.session_state["logged_in"] = False
-        st.session_state["user"] = None
+        st.session_state.logged_in = False
 
-    if st.session_state["logged_in"]:
-        st.sidebar.markdown(f"**Logged in as:** {st.session_state['user']}")
-        logout()
+    # Login/Register Page
+    if not st.session_state.logged_in:
+        tab1, tab2 = st.tabs(["Login", "Register"])
+        with tab1:
+            st.header("Login")
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            if st.button("Login"):
+                if login_user(username, password):
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.success("Logged in!")
+                    st.experimental_rerun()
+                else:
+                    st.error("Invalid login.")
+        with tab2:
+            st.header("Register")
+            new_user = st.text_input("New Username")
+            new_pass = st.text_input("New Password", type="password")
+            if st.button("Register"):
+                register_user(new_user, new_pass)
+                st.success("Registered! Please login.")
+        return
 
-        # Add menu for features
-        page = st.sidebar.selectbox("Select Feature", ["Range Estimator", "Nearest Charging Stations", "Chatbot"])
+    # Logged-in view
+    st.sidebar.header("Navigation")
+    page = st.sidebar.radio("Go to", ["Welcome", "Range Estimator", "Charging Stations", "Chatbot", "Logout"])
 
-        st.title("Twende EV Dashboard")
+    if page == "Welcome":
+        st.title("Welcome to EV Smart Dashboard 🚗🔋")
+        st.write(f"Logged in as: {st.session_state.username}")
 
-        if page == "Range Estimator":
-            estimate_range()
-        elif page == "Nearest Charging Stations":
-            nearest_station_locator()
-        elif page == "Chatbot":
-            show_chatbot()
+    elif page == "Range Estimator":
+        st.title("🔋 Estimate Your EV Range")
+        with st.form("vehicle_form"):
+            st.subheader("Enter Your Vehicle Details:")
+            vehicle_cc = st.slider("Engine Size (cc)", 800, 3000, 1500)
+            battery_years = st.slider("Battery Age (years)", 0, 10, 2)
+            battery_volts = st.slider("Battery Voltage (V)", 200, 800, 400)
+            battery_percent = st.slider("Battery Charge (%)", 0, 100, 80)
 
-    else:
-        welcome()
-        choice = st.selectbox("Choose Action", ["Login", "Register"])
-        if choice == "Login":
-            login()
-        else:
-            register()
+            city = st.text_input("City for Weather Data", "Nairobi")
+            submitted = st.form_submit_button("Estimate Range")
 
-if __name__ == '__main__':
+            if submitted:
+                weather = fetch_weather(city)
+                input_data = {
+                    'vehicle_cc': vehicle_cc,
+                    'battery_years': battery_years,
+                    'battery_volts': battery_volts,
+                    'battery_percent': battery_percent,
+                    'temperature_C': weather["temperature_C"],
+                    'humidity_percent': weather["humidity_percent"],
+                    'wind_speed_mps': weather["wind_speed_mps"]
+                }
+                estimated_km = predict_range(input_data)
+                st.success(f"🔋 Estimated Range: {estimated_km} km")
+
+    elif page == "Charging Stations":
+        st.title("📍 Locate Nearby Charging Stations")
+        lat = st.number_input("Enter your latitude", value=-1.2921)
+        lon = st.number_input("Enter your longitude", value=36.8219)
+        if st.button("Find Stations"):
+            nearest = get_nearest_stations(lat, lon)
+            if not nearest:
+                st.warning("No stations found.")
+            else:
+                m = folium.Map(location=[lat, lon], zoom_start=12)
+                folium.Marker([lat, lon], tooltip="Your Location", icon=folium.Icon(color='green')).add_to(m)
+                for s in nearest:
+                    folium.Marker([s["lat"], s["lon"]],
+                                  tooltip=f'{s["name"]} ({s["distance"]:.2f} km)',
+                                  icon=folium.Icon(color='blue')).add_to(m)
+                st_folium(m, width=700)
+
+    elif page == "Chatbot":
+        st.title("💬 EV Assistant")
+        st.write("Ask me anything about electric vehicles!")
+        prompt = st.text_input("You:", key="chat_input")
+        if st.button("Send"):
+            if prompt:
+                response = chatbot_response(prompt)
+                st.markdown(f"**Bot:** {response}")
+
+    elif page == "Logout":
+        st.session_state.logged_in = False
+        st.success("You have logged out.")
+        st.experimental_rerun()
+
+if __name__ == "__main__":
     main()
+
