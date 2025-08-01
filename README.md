@@ -107,6 +107,35 @@ MapBox API
 Groq AI Language Models
 
 
+## AI Ethics Compliance Statement
+
+The **TwendeEV Dashboard** incorporates a machine learning–based range estimator trained on simulated electric vehicle (EV) data.  
+We are committed to ensuring that all AI components in this application adhere to responsible AI principles:
+
+1. **Transparency**  
+   We clearly disclose that range predictions are based on simulated data and may not reflect all real-world conditions.  
+   Users are encouraged to use the predictions as guidance, not as an absolute measure.
+
+2. **Fairness & Accessibility**  
+   The platform offers free access for electric motorbike users to support equitable adoption of EV technology.  
+   We aim to ensure future models are trained on diverse, representative datasets to serve all EV types and user groups fairly.
+
+3. **Privacy**  
+   The app uses secure authentication with hashed passwords and does not collect personal driving or location histories without consent.  
+   Any future data collection will be anonymized and handled in accordance with data protection best practices.
+
+4. **Accountability**  
+   Users can report errors or inaccuracies in range predictions or charging station information to help improve the system.
+
+5. **Sustainability**  
+   This project supports the transition to clean transportation and aligns with the UN Sustainable Development Goals:  
+   - **SDG 7:** Affordable and Clean Energy  
+   - **SDG 13:** Climate Action
+
+We are committed to continuous improvement to ensure that our AI solutions remain ethical, safe, and beneficial to all users.
+
+
+
 Developed by Jacqueline Musyoka
 
 
