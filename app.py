@@ -1,27 +1,14 @@
 import streamlit as st
 import requests
 import joblib
-import folium
 import pandas as pd
-from streamlit_folium import st_folium
 from geopy.distance import geodesic
 from geopy.geocoders import Nominatim
-from chatbot import chatbot_response
 import sqlite3
 import hashlib
 
 # ---------------------------
-# Secrets helper
-# ---------------------------
-def get_secret(section, key, default=None):
-    try:
-        return st.secrets[section][key]
-    except Exception:
-        return default
-
-
-# ---------------------------
-# Load model (unchanged)
+# Load model
 # ---------------------------
 model = None
 try:
@@ -29,6 +16,18 @@ try:
 except Exception as e:
     st.warning(f"Failed to load range estimation model: {e}")
 
+# ---------------------------
+# Utility: Secrets loader
+# ---------------------------
+def get_secret(section, key, default=None):
+    try:
+        return st.secrets[section][key]
+    except Exception:
+        return default
+
+# ---------------------------
+# Predict Range
+# ---------------------------
 def predict_range(inputs: dict):
     if model is None:
         st.error("Range estimation model not available.")
@@ -42,36 +41,17 @@ def predict_range(inputs: dict):
         return None
 
 # ---------------------------
-# API key resolver (flat or nested)
-# ---------------------------
-def resolve_api_key(name: str):
-    """
-    Handles both flat and nested secret formats:
-      groq = "..."             (flat)
-      [groq]
-      api_key = "..."          (nested)
-    """
-    val = st.secrets.get(name)
-    if isinstance(val, dict):
-        return val.get("api_key")
-    return val  # could be string or None
-
-# ---------------------------
-# External data fetchers
+# Weather Fetcher
 # ---------------------------
 def fetch_weather(city="Nairobi"):
-    # support both flat and nested key names
-    api_key = resolve_api_key("openweather") or resolve_api_key("OPENWEATHER_API_KEY")
+    api_key = get_secret("openweather", "api_key")
     if not api_key:
-        st.warning("OpenWeather API key missing; using fallback values.")
         return {"temperature_C": 25, "humidity_percent": 50, "wind_speed_mps": 2}
     try:
         url = "https://api.openweathermap.org/data/2.5/weather"
         params = {"q": city, "appid": api_key, "units": "metric"}
         response = requests.get(url, params=params, timeout=5)
         data = response.json()
-        if response.status_code != 200:
-            raise ValueError(data.get("message", "weather API error"))
         return {
             "temperature_C": data["main"]["temp"],
             "humidity_percent": data["main"]["humidity"],
@@ -80,102 +60,98 @@ def fetch_weather(city="Nairobi"):
     except Exception:
         return {"temperature_C": 25, "humidity_percent": 50, "wind_speed_mps": 2}
 
-# Charging station lookup
+# ---------------------------
+# Geocoding
+# ---------------------------
+def geocode_location(place_name):
+    mapbox_key = st.secrets["mapbox"]["api_key"]
+    url = "https://api.mapbox.com/geocoding/v5/mapbox.places/{}.json".format(place_name)
+    params = {
+        "access_token": mapbox_key,
+        "limit": 1,
+        "country": "KE"  # restrict to Kenya for more accurate results
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        if data["features"]:
+            coords = data["features"][0]["center"]
+            lon, lat = coords[0], coords[1]
+            return lat, lon
+        else:
+            st.warning("No results found for that location.")
+            return None, None
+    except Exception as e:
+        st.error(f"Geocoding failed: {e}")
+        return None, None
+
+
+# ---------------------------
+# Charging Station Lookup
+# ---------------------------
 def get_nearest_stations(lat, lon):
-    openchargemap_key = resolve_api_key("open_charge_map") or resolve_api_key("OPENCHARGEMAP_API_KEY")
-    if not openchargemap_key:
-        st.warning("OpenChargeMap API key missing; cannot search stations.")
+    api_key = get_secret("open_charge_map", "api_key")
+    if not api_key:
         return []
 
     base_url = "https://api.openchargemap.io/v3/poi/"
     params = {
         "output": "json",
-        "countrycode": "KE",  # try keeping; fallback will remove if empty
+        "countrycode": "KE",
         "latitude": lat,
         "longitude": lon,
         "maxresults": 10,
-        "compact": "true",
-        # "distance": 50,  # uncomment to expand radius
-        # "distanceunit": "KM"
+        "compact": "true"
     }
-    api_key = get_secret("open_charge_map", "api_key")
     headers = {"X-API-Key": api_key}
-
 
     try:
         response = requests.get(base_url, params=params, headers=headers, timeout=7)
-        st.write("🔍 OpenChargeMap request URL:", response.url)
-        st.write("📦 Status code:", response.status_code)
         data = response.json()
-        st.write("🧪 Raw response length:", len(data))
 
-        # Fallback: if empty and countrycode was restricting, try without it
         if not data:
-            st.info("No stations found with country filter, retrying without countrycode...")
             params.pop("countrycode", None)
-            response2 = requests.get(base_url, params=params, headers=headers, timeout=7)
-            st.write("🔁 Retry URL:", response2.url)
-            st.write("📦 Retry status:", response2.status_code)
-            data = response2.json()
-            st.write("🧪 Retry raw length:", len(data))
+            response = requests.get(base_url, params=params, headers=headers, timeout=7)
+            data = response.json()
 
         if not data:
-            st.info("Still no POIs returned; maybe the location is sparse or rate-limited.")
             return []
 
         stations = []
         for station in data:
-            try:
-                info = station.get("AddressInfo", {})
-                title = info.get("Title", "Unnamed")
-                slat = info.get("Latitude")
-                slon = info.get("Longitude")
-                if slat is None or slon is None:
-                    continue
-                distance = geodesic((lat, lon), (slat, slon)).km
-                number_of_points = station.get("NumberOfPoints")
-                connections = station.get("Connections", [])
-                if number_of_points is None:
-                    number_of_points = len(connections) if isinstance(connections, list) else None
-                stations.append({
-                    "name": title,
-                    "lat": slat,
-                    "lon": slon,
-                    "distance": distance,
-                    "number_of_points": number_of_points,
-                    "connections": connections
-                })
-            except Exception:
+            info = station.get("AddressInfo", {})
+            title = info.get("Title", "Unnamed")
+            slat = info.get("Latitude")
+            slon = info.get("Longitude")
+            if slat is None or slon is None:
                 continue
-        sorted_stations = sorted(stations, key=lambda x: x["distance"])
-        return sorted_stations[:5]
-    except Exception as e:
-        st.error(f"Error fetching stations: {e}")
+            distance = geodesic((lat, lon), (slat, slon)).km
+            num_points = station.get("NumberOfPoints")
+            conns = station.get("Connections", [])
+            if num_points is None:
+                num_points = len(conns) if isinstance(conns, list) else None
+            stations.append({
+                "name": title,
+                "lat": slat,
+                "lon": slon,
+                "distance": distance,
+                "number_of_points": num_points
+            })
+        return sorted(stations, key=lambda x: x["distance"])[:5]
+    except Exception:
         return []
 
-
-def geocode_location(place_name):
-    try:
-        geolocator = Nominatim(user_agent="ev_dashboard")
-        if "kenya" not in place_name.lower():
-            place_name += ", Kenya"
-        location = geolocator.geocode(place_name, timeout=10)
-        if location:
-            return location.latitude, location.longitude
-    except Exception:
-        pass
-    return None, None
-
-
 # ---------------------------
-# Auth setup
+# Authentication
 # ---------------------------
 conn = sqlite3.connect("users.db", check_same_thread=False)
 c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT UNIQUE, password TEXT)''')
 conn.commit()
 
-def hash_password(password: str) -> str:
+def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 def login_user(username, password):
@@ -191,30 +167,22 @@ def register_user(username, password):
         return False
 
 # ---------------------------
-# App UI
+# Streamlit App
 # ---------------------------
 def main():
     st.set_page_config("EV Smart Dashboard", layout="wide")
-    st.markdown("<h1 style='text-align: center; color: #0f9d58;'>🌍 TWENDE EV: Your Smart Electric Journey Starts Here!</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center; color: #0f9d58;'>\U0001F30D TWENDE EV: Your Smart Electric Journey Starts Here!</h1>", unsafe_allow_html=True)
 
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
         st.session_state.username = ""
 
-    # Debugging secrets (remove once stable)
-    st.sidebar.markdown("**Secrets diagnostics**")
-    st.sidebar.write("Loaded secret sections:", list(st.secrets.keys()))
-    st.sidebar.write("OpenChargeMap resolved:", bool(resolve_api_key("open_charge_map") or resolve_api_key("OPENCHARGEMAP_API_KEY")))
-    st.sidebar.write("OpenWeather resolved:", bool(resolve_api_key("openweather") or resolve_api_key("OPENWEATHER_API_KEY")))
-    st.sidebar.write("Groq resolved:", bool(resolve_api_key("groq") or resolve_api_key("groq")))  # fallback same
-
-    # Authentication
     if not st.session_state.logged_in:
         tab1, tab2 = st.tabs(["Login", "Register"])
         with tab1:
             st.header("Login")
-            username = st.text_input("Username", key="login_user")
-            password = st.text_input("Password", type="password", key="login_pass")
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
             if st.button("Login"):
                 if login_user(username, password):
                     st.session_state.logged_in = True
@@ -225,40 +193,27 @@ def main():
                     st.error("Invalid credentials.")
         with tab2:
             st.header("Register")
-            new_user = st.text_input("New Username", key="reg_user")
-            new_pass = st.text_input("New Password", type="password", key="reg_pass")
+            new_user = st.text_input("New Username")
+            new_pass = st.text_input("New Password", type="password")
             if st.button("Register"):
-                success = register_user(new_user, new_pass)
-                if success:
-                    st.success("Registered! Please log in.")
+                if register_user(new_user, new_pass):
+                    st.success("Registered! Please login.")
                 else:
-                    st.error("Registration failed (username may already exist).")
+                    st.error("Registration failed (username may exist).")
         return
 
-    # Navigation
     st.sidebar.header("Navigation")
-    page = st.sidebar.radio("Go to", ["Welcome", "Range Estimator", "Charging Stations", "Chatbot", "Logout"])
+    page = st.sidebar.radio("Go to", ["Welcome", "Range Estimator", "Charging Stations", "Logout"])
 
     if page == "Welcome":
         st.title("Welcome to EV Smart Dashboard 🚗🔋")
         st.write(f"Logged in as: **{st.session_state.username}**")
-        st.markdown(
-            """
-            This dashboard helps you:
-            - Estimate your EV range using real-time weather and vehicle parameters.
-            - Locate nearby charging stations by place name.
-            - Ask questions via the EV assistant chatbot.
-            """
-        )
 
     elif page == "Range Estimator":
         st.title("🔋 Estimate Your EV Range")
-        with st.form("vehicle_form"):
-            st.subheader("Enter Vehicle & Environmental Details")
-            vehicle_type = st.selectbox(
-                "Vehicle Type",
-                ["motorbike", "truck", "car", "bus"]  # exactly as in training
-            )
+        with st.form("range_form"):
+            st.subheader("Vehicle & Environment")
+            vehicle_type = st.selectbox("Vehicle Type", ["motorbike", "truck", "car", "bus"])
             vehicle_cc = st.slider("Engine Size (cc)", 800, 3000, 1500)
             battery_years = st.slider("Battery Age (years)", 0, 10, 2)
             battery_volts = st.slider("Battery Voltage (V)", 200, 800, 400)
@@ -276,96 +231,37 @@ def main():
                     "battery_percent": battery_percent,
                     "temperature_C": weather["temperature_C"],
                     "humidity_percent": weather["humidity_percent"],
-                    "wind_speed_mps": weather["wind_speed_mps"],
+                    "wind_speed_mps": weather["wind_speed_mps"]
                 }
                 estimated_km = predict_range(input_data)
-                if estimated_km is not None:
+                if estimated_km:
                     st.success(f"🔋 Estimated Range: **{estimated_km} km**")
-                else:
-                    st.error("Could not compute range.")
 
     elif page == "Charging Stations":
         st.title("📍 Locate Nearby Charging Stations")
-        st.write("Search by place name (e.g., Nairobi, Kisumu).")
-
-        with st.form("station_form"):
-            city = st.text_input("Enter your location", "Nairobi")
-            submitted = st.form_submit_button("Find Stations")
-
-        if submitted:
-            st.markdown(f"**Searching around:** {city}")
+        city = st.text_input("Enter location", "Nairobi")
+        if st.button("Find Stations"):
             lat, lon = geocode_location(city)
-            st.write("Resolved coordinates:", lat, lon)
-            if lat is None or lon is None:
-                st.error("Could not geocode that location.")
+            if lat is None:
+                st.error("Could not locate that place.")
             else:
-                nearest = get_nearest_stations(lat, lon)
-                if not nearest:
-                    st.warning("No stations found. Try a nearby major city or expand search radius.")
+                stations = get_nearest_stations(lat, lon)
+                if not stations:
+                    st.warning("No stations found. Try a nearby city.")
                 else:
-                    st.subheader("Nearest charging stations")
-                    for idx, s in enumerate(nearest, start=1):
-                        num_points = s.get("number_of_points", "N/A")
-                        if isinstance(num_points, int):
-                            point_label = f"{num_points} charging point{'s' if num_points != 1 else ''}"
-                        else:
-                            point_label = "Charging points: N/A"
-                        map_link = (
-                            f"https://www.openstreetmap.org/?mlat={s['lat']}&mlon={s['lon']}#map=14/"
-                            f"{s['lat']}/{s['lon']}"
-                        )
-                        st.markdown(
-                            f"{idx}. **{s['name']}** — {s['distance']:.2f} km away — {point_label}  "
-                            f"[View on map]({map_link})"
-                        )
-
-                    with st.expander("Show map"):
-                        m = folium.Map(location=[lat, lon], zoom_start=12)
-                        folium.Marker([lat, lon], tooltip="Your Location", icon=folium.Icon(color="green")).add_to(m)
-                        for s in nearest:
-                            folium.Marker(
-                                [s["lat"], s["lon"]],
-                                tooltip=f'{s["name"]} ({s["distance"]:.2f} km)',
-                                icon=folium.Icon(color="blue"),
-                            ).add_to(m)
-                        st_folium(m, width=700)
-
-
-
-    elif page == "Chatbot":
-        st.title("💬 EV Assistant")
-        st.write("Ask me anything about electric vehicles.")
-        prompt = st.text_input("You:", key="chat_input")
-        groq_key = resolve_api_key("groq")  # safely get groq key (nested or flat)
-        if not groq_key:
-            st.warning("Groq API key not configured; responses may be limited.")
-
-        if st.button("Send"):
-            if prompt:
-                # Try passing key if signature allows, else fallback
-                try:
-                    response = chatbot_response(prompt, groq_key=groq_key)
-                except TypeError:
-                    response = chatbot_response(prompt)
-                st.markdown(f"**Bot:** {response}")
+                    st.subheader("Nearest Stations")
+                    for i, s in enumerate(stations, start=1):
+                        count_str = f"{s['number_of_points']} point(s)" if s['number_of_points'] else "Unknown points"
+                        st.markdown(f"{i}. **{s['name']}** — {s['distance']:.2f} km away — {count_str}")
 
     elif page == "Logout":
         st.session_state.logged_in = False
-        st.success("You have logged out.")
+        st.success("Logged out.")
         st.experimental_rerun()
-
-def geocode_location(place_name):
-    try:
-        geolocator = Nominatim(user_agent="ev_dashboard")
-        location = geolocator.geocode(place_name, timeout=10)
-        if location:
-            return location.latitude, location.longitude
-    except Exception:
-        pass
-    return None, None
 
 if __name__ == "__main__":
     main()
+
 
 
 
