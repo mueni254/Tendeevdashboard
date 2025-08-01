@@ -30,7 +30,8 @@ A smart, user-friendly dashboard for electric vehicle (EV) drivers with the foll
   - Battery voltage and age  
   - Battery charge percentage  
   - Environmental conditions (temperature, humidity, wind speed)  
-
+  - file link https://colab.research.google.com/drive/18LYhcOM1dQrlnQQ7xVRVGu9IgXuvBIYZ?usp=sharing
+  - 
 - **Charging Station Finder**  
   Search nearest EV charging stations by location with distance and number of charging points displayed (powered by OpenChargeMap API).
 
