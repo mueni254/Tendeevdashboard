@@ -19,7 +19,29 @@ A smart, user-friendly dashboard for electric vehicle (EV) drivers with the foll
 
 ### Key Features
 
-- **User Authentication**  
+- - **User Authentication**  
+  Secure login and registration using hashed passwords and SQLite database.
+
+- **EV Range Estimator (AI-Powered)**  
+  Input vehicle specs and environmental data (live weather) to estimate your EV's remaining range.  
+  The estimator is powered by a **machine learning model** trained on synthetic and sample EV operational datasets, including variables such as:
+  - Vehicle type (car, bus, truck, motorbike)  
+  - Engine size (cc)  
+  - Battery voltage and age  
+  - Battery charge percentage  
+  - Environmental conditions (temperature, humidity, wind speed)  
+
+- **Charging Station Finder**  
+  Search nearest EV charging stations by location with distance and number of charging points displayed (powered by OpenChargeMap API).
+
+- **Chatbot Assistant**  
+  Ask EV-related questions to a helpful AI assistant integrated via Groq's language model API.
+
+- **Robust Location Lookup**  
+  Location search powered by OpenStreetMap/Nominatim with automatic Kenya suffix addition for accurate geocoding.
+
+- **Clean, Responsive UI**  
+  Built with Streamlit's interactive widgets and layouts.**User Authentication**  
   Secure login and registration using hashed passwords and SQLite database.
 
 - **EV Range Estimator**  
