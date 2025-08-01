@@ -11,6 +11,16 @@ import sqlite3
 import hashlib
 
 # ---------------------------
+# Secrets helper
+# ---------------------------
+def get_secret(section, key, default=None):
+    try:
+        return st.secrets[section][key]
+    except Exception:
+        return default
+
+
+# ---------------------------
 # Load model (unchanged)
 # ---------------------------
 model = None
