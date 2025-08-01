@@ -276,46 +276,47 @@ def main():
         st.write("Search by place name (e.g., Nairobi, Kisumu).")
 
         with st.form("station_form"):
-        city = st.text_input("Enter your location", "Nairobi")
-        submitted = st.form_submit_button("Find Stations")
+            city = st.text_input("Enter your location", "Nairobi")
+            submitted = st.form_submit_button("Find Stations")
 
         if submitted:
-         st.markdown(f"**Searching around:** {city}")
-         lat, lon = geocode_location(city)
-         st.write("Resolved coordinates:", lat, lon)
-         if lat is None or lon is None:
-            st.error("Could not geocode that location.")
-         else:
-            nearest = get_nearest_stations(lat, lon)
-            if not nearest:
-                st.warning("No stations found. Try a nearby major city or expand search radius.")
+            st.markdown(f"**Searching around:** {city}")
+            lat, lon = geocode_location(city)
+            st.write("Resolved coordinates:", lat, lon)
+            if lat is None or lon is None:
+                st.error("Could not geocode that location.")
             else:
-                st.subheader("Nearest charging stations")
-                for idx, s in enumerate(nearest, start=1):
-                    num_points = s.get("number_of_points", "N/A")
-                    if isinstance(num_points, int):
-                        point_label = f"{num_points} charging point{'s' if num_points != 1 else ''}"
-                    else:
-                        point_label = "Charging points: N/A"
-                    map_link = (
-                        f"https://www.openstreetmap.org/?mlat={s['lat']}&mlon={s['lon']}#map=14/"
-                        f"{s['lat']}/{s['lon']}"
-                    )
-                    st.markdown(
-                        f"{idx}. **{s['name']}** — {s['distance']:.2f} km away — {point_label}  "
-                        f"[View on map]({map_link})"
-                    )
+                nearest = get_nearest_stations(lat, lon)
+                if not nearest:
+                    st.warning("No stations found. Try a nearby major city or expand search radius.")
+                else:
+                    st.subheader("Nearest charging stations")
+                    for idx, s in enumerate(nearest, start=1):
+                        num_points = s.get("number_of_points", "N/A")
+                        if isinstance(num_points, int):
+                            point_label = f"{num_points} charging point{'s' if num_points != 1 else ''}"
+                        else:
+                            point_label = "Charging points: N/A"
+                        map_link = (
+                            f"https://www.openstreetmap.org/?mlat={s['lat']}&mlon={s['lon']}#map=14/"
+                            f"{s['lat']}/{s['lon']}"
+                        )
+                        st.markdown(
+                            f"{idx}. **{s['name']}** — {s['distance']:.2f} km away — {point_label}  "
+                            f"[View on map]({map_link})"
+                        )
 
-                with st.expander("Show map"):
-                    m = folium.Map(location=[lat, lon], zoom_start=12)
-                    folium.Marker([lat, lon], tooltip="Your Location", icon=folium.Icon(color="green")).add_to(m)
-                    for s in nearest:
-                        folium.Marker(
-                            [s["lat"], s["lon"]],
-                            tooltip=f'{s["name"]} ({s["distance"]:.2f} km)',
-                            icon=folium.Icon(color="blue"),
-                        ).add_to(m)
-                    st_folium(m, width=700)
+                    with st.expander("Show map"):
+                        m = folium.Map(location=[lat, lon], zoom_start=12)
+                        folium.Marker([lat, lon], tooltip="Your Location", icon=folium.Icon(color="green")).add_to(m)
+                        for s in nearest:
+                            folium.Marker(
+                                [s["lat"], s["lon"]],
+                                tooltip=f'{s["name"]} ({s["distance"]:.2f} km)',
+                                icon=folium.Icon(color="blue"),
+                            ).add_to(m)
+                        st_folium(m, width=700)
+
 
 
     elif page == "Chatbot":
