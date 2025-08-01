@@ -1,34 +1,89 @@
 # Tendeevdashboard
 
-### Live Demo
+## Live Demo
 
 Try the live Streamlit app here:  
-[https://your-app-name.streamlit.app]( https://tendeevdashboard-b26ripkc446hnrkmskwujk.streamlit.app/ )
+[https://tendeevdashboard-b26ripkc446hnrkmskwujk.streamlit.app/](https://tendeevdashboard-b26ripkc446hnrkmskwujk.streamlit.app/)
 
-##TWENDEEV APP PITCH LINK
-https://www.canva.com/design/DAGli_GFO2Y/eUYfO74IZ8cbVXt0W-_E5A/edit?utm_content=DAGli_GFO2Y&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton
+---
+
+## TWENDEEV APP PITCH LINK
+
+[https://www.canva.com/design/DAGli_GFO2Y/eUYfO74IZ8cbVXt0W-_E5A/edit?utm_content=DAGli_GFO2Y&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton](https://www.canva.com/design/DAGli_GFO2Y/eUYfO74IZ8cbVXt0W-_E5A/edit?utm_content=DAGli_GFO2Y&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton)
+
+---
+
+## TWENDE EV DASHBOARD
+
+A smart, user-friendly dashboard for electric vehicle (EV) drivers with the following core functionalities:
+
+### Key Features
+
+- **User Authentication**  
+  Secure login and registration using hashed passwords and SQLite database.
+
+- **EV Range Estimator**  
+  Input vehicle specs and environmental data (live weather) to estimate your EV's remaining range.
+
+- **Charging Station Finder**  
+  Search nearest EV charging stations by location with distance and number of charging points displayed (powered by OpenChargeMap API).
+
+- **Chatbot Assistant**  
+  Ask EV-related questions to a helpful AI assistant integrated via Groq's language model API.
+
+- **Robust Location Lookup**  
+  Location search powered by OpenStreetMap/Nominatim with automatic Kenya suffix addition for accurate geocoding.
+
+- **Clean, Responsive UI**  
+  Built with Streamlit's interactive widgets and layouts.
+
+---
+
+## Setup and Configuration
+
+### API Keys & Secrets
+
+The app requires the following API keys stored securely in Streamlit secrets (`.streamlit/secrets.toml`):
+
+```toml
+[mapbox]
+api_key = "your_mapbox_api_key"
+
+[open_charge_map]
+api_key = "your_openchargemap_api_key"
+
+[groq]
+api_key = "your_groq_api_key"
+
+[openweather]
+api_key = "your_openweather_api_key"
+
+## Dependencies
+Python 3.8+
+streamlit
+requests
+joblib
+pandas
+geopy
+sqlite3 (built-in)
+hashlib (built-in)
 
 
-A dashboard to help electric vehicle drivers identify close petrol stations
-## ⚡ Nearest EV Charging Station Finder (Streamlit App)
 
-This is a lightweight Streamlit web app that helps EV drivers find the **nearest charging station** from a manually entered location.
+## Usage
+Register or login before accessing app features.
+Use the Range Estimator page to input your vehicle and environment info to estimate driving range.
+Use the Charging Stations page to search for nearby EV charging stations by city or place name.
+Chat with the AI-powered EV Assistant chatbot for answers to EV questions.
+Logout securely via sidebar navigation.
 
-## 🚀 Features
+## Resources
+OpenChargeMap API Documentation
+OpenWeather API Documentation
+MapBox API
+Groq AI Language Models
 
-- Simple user interface
-- Manually enter your current location (latitude and longitude)
-- Calculates and shows the **nearest hardcoded EV station**
-- Map view using Mapbox API
-- No backend or database required
 
-## 🗺️ Mapbox Setup
-
-This app uses Mapbox for map rendering. You’ll need a free Mapbox account and API token.
-
-1. Get your token at [https://account.mapbox.com/](https://account.mapbox.com/)
-2. Store it securely in a `.streamlit/secrets.toml` file
-
-3. 
+Developed by Jacqueline Musyoka
 
 
