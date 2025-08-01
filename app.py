@@ -157,12 +157,15 @@ def get_nearest_stations(lat, lon):
 def geocode_location(place_name):
     try:
         geolocator = Nominatim(user_agent="ev_dashboard")
+        if "kenya" not in place_name.lower():
+            place_name += ", Kenya"
         location = geolocator.geocode(place_name, timeout=10)
         if location:
             return location.latitude, location.longitude
     except Exception:
         pass
     return None, None
+
 
 # ---------------------------
 # Auth setup
