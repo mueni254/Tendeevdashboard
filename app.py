@@ -75,19 +75,41 @@ def get_nearest_stations(lat, lon):
     if not openchargemap_key:
         st.warning("OpenChargeMap API key missing; cannot search stations.")
         return []
-    api_url = "https://api.openchargemap.io/v3/poi/"
+
+    base_url = "https://api.openchargemap.io/v3/poi/"
     params = {
         "output": "json",
-        "countrycode": "KE",
+        "countrycode": "KE",  # try keeping; fallback will remove if empty
         "latitude": lat,
         "longitude": lon,
         "maxresults": 10,
         "compact": "true",
+        # "distance": 50,  # uncomment to expand radius
+        # "distanceunit": "KM"
     }
     headers = {"X-API-Key": openchargemap_key}
+
     try:
-        response = requests.get(api_url, params=params, headers=headers, timeout=7)
+        response = requests.get(base_url, params=params, headers=headers, timeout=7)
+        st.write("🔍 OpenChargeMap request URL:", response.url)
+        st.write("📦 Status code:", response.status_code)
         data = response.json()
+        st.write("🧪 Raw response length:", len(data))
+
+        # Fallback: if empty and countrycode was restricting, try without it
+        if not data:
+            st.info("No stations found with country filter, retrying without countrycode...")
+            params.pop("countrycode", None)
+            response2 = requests.get(base_url, params=params, headers=headers, timeout=7)
+            st.write("🔁 Retry URL:", response2.url)
+            st.write("📦 Retry status:", response2.status_code)
+            data = response2.json()
+            st.write("🧪 Retry raw length:", len(data))
+
+        if not data:
+            st.info("Still no POIs returned; maybe the location is sparse or rate-limited.")
+            return []
+
         stations = []
         for station in data:
             try:
@@ -114,8 +136,10 @@ def get_nearest_stations(lat, lon):
                 continue
         sorted_stations = sorted(stations, key=lambda x: x["distance"])
         return sorted_stations[:5]
-    except Exception:
+    except Exception as e:
+        st.error(f"Error fetching stations: {e}")
         return []
+
 
 def geocode_location(place_name):
     try:
@@ -245,47 +269,51 @@ def main():
                     st.error("Could not compute range.")
 
     elif page == "Charging Stations":
-        st.title("📍 Locate Nearby Charging Stations")
-        st.write("Search by place name (e.g., Nairobi, Kisumu).")
-        with st.form("station_form"):
-            city = st.text_input("Enter your location", "Nairobi")
-            submitted = st.form_submit_button("Find Stations")
+    st.title("📍 Locate Nearby Charging Stations")
+    st.write("Search by place name (e.g., Nairobi, Kisumu).")
 
-        if submitted:
-            lat, lon = geocode_location(city)
-            if lat is None or lon is None:
-                st.error("Could not geocode that location.")
+    with st.form("station_form"):
+        city = st.text_input("Enter your location", "Nairobi")
+        submitted = st.form_submit_button("Find Stations")
+
+    if submitted:
+        st.markdown(f"**Searching around:** {city}")
+        lat, lon = geocode_location(city)
+        st.write("Resolved coordinates:", lat, lon)
+        if lat is None or lon is None:
+            st.error("Could not geocode that location.")
+        else:
+            nearest = get_nearest_stations(lat, lon)
+            if not nearest:
+                st.warning("No stations found. Try a nearby major city or expand search radius.")
             else:
-                nearest = get_nearest_stations(lat, lon)
-                if not nearest:
-                    st.warning("No stations found.")
-                else:
-                    st.subheader("Nearest charging stations")
-                    for idx, s in enumerate(nearest, start=1):
-                        num_points = s.get("number_of_points", "N/A")
-                        if isinstance(num_points, int):
-                            point_label = f"{num_points} charging point{'s' if num_points != 1 else ''}"
-                        else:
-                            point_label = "Charging points: N/A"
-                        map_link = (
-                            f"https://www.openstreetmap.org/?mlat={s['lat']}&mlon={s['lon']}#map=14/"
-                            f"{s['lat']}/{s['lon']}"
-                        )
-                        st.markdown(
-                            f"{idx}. **{s['name']}** — {s['distance']:.2f} km away — {point_label}  "
-                            f"[View on map]({map_link})"
-                        )
+                st.subheader("Nearest charging stations")
+                for idx, s in enumerate(nearest, start=1):
+                    num_points = s.get("number_of_points", "N/A")
+                    if isinstance(num_points, int):
+                        point_label = f"{num_points} charging point{'s' if num_points != 1 else ''}"
+                    else:
+                        point_label = "Charging points: N/A"
+                    map_link = (
+                        f"https://www.openstreetmap.org/?mlat={s['lat']}&mlon={s['lon']}#map=14/"
+                        f"{s['lat']}/{s['lon']}"
+                    )
+                    st.markdown(
+                        f"{idx}. **{s['name']}** — {s['distance']:.2f} km away — {point_label}  "
+                        f"[View on map]({map_link})"
+                    )
 
-                    with st.expander("Show map"):
-                        m = folium.Map(location=[lat, lon], zoom_start=12)
-                        folium.Marker([lat, lon], tooltip="Your Location", icon=folium.Icon(color="green")).add_to(m)
-                        for s in nearest:
-                            folium.Marker(
-                                [s["lat"], s["lon"]],
-                                tooltip=f'{s["name"]} ({s["distance"]:.2f} km)',
-                                icon=folium.Icon(color="blue"),
-                            ).add_to(m)
-                        st_folium(m, width=700)
+                with st.expander("Show map"):
+                    m = folium.Map(location=[lat, lon], zoom_start=12)
+                    folium.Marker([lat, lon], tooltip="Your Location", icon=folium.Icon(color="green")).add_to(m)
+                    for s in nearest:
+                        folium.Marker(
+                            [s["lat"], s["lon"]],
+                            tooltip=f'{s["name"]} ({s["distance"]:.2f} km)',
+                            icon=folium.Icon(color="blue"),
+                        ).add_to(m)
+                    st_folium(m, width=700)
+
 
     elif page == "Chatbot":
         st.title("💬 EV Assistant")
