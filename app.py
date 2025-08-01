@@ -269,8 +269,8 @@ def main():
                     st.error("Could not compute range.")
 
     elif page == "Charging Stations":
-    st.title("📍 Locate Nearby Charging Stations")
-    st.write("Search by place name (e.g., Nairobi, Kisumu).")
+        st.title("📍 Locate Nearby Charging Stations")
+        st.write("Search by place name (e.g., Nairobi, Kisumu).")
 
     with st.form("station_form"):
         city = st.text_input("Enter your location", "Nairobi")
