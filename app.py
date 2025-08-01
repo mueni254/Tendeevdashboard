@@ -11,7 +11,7 @@ import sqlite3
 import hashlib
 
 # ---------------------------
-# Load model
+# Load model (unchanged)
 # ---------------------------
 model = None
 try:
@@ -32,19 +32,26 @@ def predict_range(inputs: dict):
         return None
 
 # ---------------------------
-# Secrets helper
+# API key resolver (flat or nested)
 # ---------------------------
-def get_secret(section, key, default=None):
-    try:
-        return st.secrets[section][key]
-    except Exception:
-        return default
+def resolve_api_key(name: str):
+    """
+    Handles both flat and nested secret formats:
+      groq = "..."             (flat)
+      [groq]
+      api_key = "..."          (nested)
+    """
+    val = st.secrets.get(name)
+    if isinstance(val, dict):
+        return val.get("api_key")
+    return val  # could be string or None
 
 # ---------------------------
 # External data fetchers
 # ---------------------------
 def fetch_weather(city="Nairobi"):
-    api_key = get_secret("openweather", "api_key")
+    # support both flat and nested key names
+    api_key = resolve_api_key("openweather") or resolve_api_key("OPENWEATHER_API_KEY")
     if not api_key:
         st.warning("OpenWeather API key missing; using fallback values.")
         return {"temperature_C": 25, "humidity_percent": 50, "wind_speed_mps": 2}
@@ -64,7 +71,7 @@ def fetch_weather(city="Nairobi"):
         return {"temperature_C": 25, "humidity_percent": 50, "wind_speed_mps": 2}
 
 def get_nearest_stations(lat, lon):
-    openchargemap_key = get_secret("open_charge_map", "api_key")
+    openchargemap_key = resolve_api_key("open_charge_map") or resolve_api_key("OPENCHARGEMAP_API_KEY")
     if not openchargemap_key:
         st.warning("OpenChargeMap API key missing; cannot search stations.")
         return []
@@ -76,9 +83,6 @@ def get_nearest_stations(lat, lon):
         "longitude": lon,
         "maxresults": 10,
         "compact": "true",
-        # optional wider search parameters if needed
-        # "distance": 50,
-        # "distanceunit": "KM"
     }
     headers = {"X-API-Key": openchargemap_key}
     try:
@@ -94,7 +98,6 @@ def get_nearest_stations(lat, lon):
                 if slat is None or slon is None:
                     continue
                 distance = geodesic((lat, lon), (slat, slon)).km
-                # Determine number of points
                 number_of_points = station.get("NumberOfPoints")
                 connections = station.get("Connections", [])
                 if number_of_points is None:
@@ -158,11 +161,12 @@ def main():
         st.session_state.logged_in = False
         st.session_state.username = ""
 
-    # debug keys (can be removed once stable)
+    # Debugging secrets (remove once stable)
     st.sidebar.markdown("**Secrets diagnostics**")
     st.sidebar.write("Loaded secret sections:", list(st.secrets.keys()))
-    st.sidebar.write("OpenChargeMap present:", bool(get_secret("open_charge_map", "api_key")))
-    st.sidebar.write("OpenWeather present:", bool(get_secret("openweather", "api_key")))
+    st.sidebar.write("OpenChargeMap resolved:", bool(resolve_api_key("open_charge_map") or resolve_api_key("OPENCHARGEMAP_API_KEY")))
+    st.sidebar.write("OpenWeather resolved:", bool(resolve_api_key("openweather") or resolve_api_key("OPENWEATHER_API_KEY")))
+    st.sidebar.write("Groq resolved:", bool(resolve_api_key("groq") or resolve_api_key("groq")))  # fallback same
 
     # Authentication
     if not st.session_state.logged_in:
@@ -287,15 +291,33 @@ def main():
         st.title("💬 EV Assistant")
         st.write("Ask me anything about electric vehicles.")
         prompt = st.text_input("You:", key="chat_input")
+        groq_key = resolve_api_key("groq")  # safely get groq key (nested or flat)
+        if not groq_key:
+            st.warning("Groq API key not configured; responses may be limited.")
+
         if st.button("Send"):
             if prompt:
-                response = chatbot_response(prompt)
+                # Try passing key if signature allows, else fallback
+                try:
+                    response = chatbot_response(prompt, groq_key=groq_key)
+                except TypeError:
+                    response = chatbot_response(prompt)
                 st.markdown(f"**Bot:** {response}")
 
     elif page == "Logout":
         st.session_state.logged_in = False
         st.success("You have logged out.")
         st.experimental_rerun()
+
+def geocode_location(place_name):
+    try:
+        geolocator = Nominatim(user_agent="ev_dashboard")
+        location = geolocator.geocode(place_name, timeout=10)
+        if location:
+            return location.latitude, location.longitude
+    except Exception:
+        pass
+    return None, None
 
 if __name__ == "__main__":
     main()
