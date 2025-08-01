@@ -70,6 +70,7 @@ def fetch_weather(city="Nairobi"):
     except Exception:
         return {"temperature_C": 25, "humidity_percent": 50, "wind_speed_mps": 2}
 
+# Charging station lookup
 def get_nearest_stations(lat, lon):
     openchargemap_key = resolve_api_key("open_charge_map") or resolve_api_key("OPENCHARGEMAP_API_KEY")
     if not openchargemap_key:
@@ -87,7 +88,9 @@ def get_nearest_stations(lat, lon):
         # "distance": 50,  # uncomment to expand radius
         # "distanceunit": "KM"
     }
-    headers = {"X-API-Key": openchargemap_key}
+    api_key = get_secret("open_charge_map", "api_key")
+    headers = {"X-API-Key": api_key}
+
 
     try:
         response = requests.get(base_url, params=params, headers=headers, timeout=7)
@@ -272,17 +275,17 @@ def main():
         st.title("📍 Locate Nearby Charging Stations")
         st.write("Search by place name (e.g., Nairobi, Kisumu).")
 
-    with st.form("station_form"):
+        with st.form("station_form"):
         city = st.text_input("Enter your location", "Nairobi")
         submitted = st.form_submit_button("Find Stations")
 
-    if submitted:
-        st.markdown(f"**Searching around:** {city}")
-        lat, lon = geocode_location(city)
-        st.write("Resolved coordinates:", lat, lon)
-        if lat is None or lon is None:
+        if submitted:
+         st.markdown(f"**Searching around:** {city}")
+         lat, lon = geocode_location(city)
+         st.write("Resolved coordinates:", lat, lon)
+         if lat is None or lon is None:
             st.error("Could not geocode that location.")
-        else:
+         else:
             nearest = get_nearest_stations(lat, lon)
             if not nearest:
                 st.warning("No stations found. Try a nearby major city or expand search radius.")
