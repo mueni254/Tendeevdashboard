@@ -7,6 +7,9 @@ from geopy.geocoders import Nominatim
 import sqlite3
 import hashlib
 
+# Import chatbot_response from chatbot.py
+from chatbot import chatbot_response
+
 # ---------------------------
 # Load model
 # ---------------------------
@@ -24,6 +27,15 @@ def get_secret(section, key, default=None):
         return st.secrets[section][key]
     except Exception:
         return default
+
+def resolve_api_key(service_name):
+    """Safely get API key from secrets, handling different cases."""
+    key = get_secret(service_name, "api_key")
+    if key:
+        return key
+    # Fallback: flat key format in secrets
+    key = st.secrets.get(service_name.upper() + "_API_KEY")
+    return key
 
 # ---------------------------
 # Predict Range
@@ -64,29 +76,16 @@ def fetch_weather(city="Nairobi"):
 # Geocoding
 # ---------------------------
 def geocode_location(place_name):
-    mapbox_key = st.secrets["mapbox"]["api_key"]
-    url = "https://api.mapbox.com/geocoding/v5/mapbox.places/{}.json".format(place_name)
-    params = {
-        "access_token": mapbox_key,
-        "limit": 1,
-        "country": "KE"  # restrict to Kenya for more accurate results
-    }
-
     try:
-        response = requests.get(url, params=params, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-        if data["features"]:
-            coords = data["features"][0]["center"]
-            lon, lat = coords[0], coords[1]
-            return lat, lon
-        else:
-            st.warning("No results found for that location.")
-            return None, None
-    except Exception as e:
-        st.error(f"Geocoding failed: {e}")
-        return None, None
-
+        if "kenya" not in place_name.lower():
+            place_name = f"{place_name.strip()}, Kenya"
+        geolocator = Nominatim(user_agent="ev_dashboard")
+        location = geolocator.geocode(place_name, timeout=10)
+        if location:
+            return location.latitude, location.longitude
+    except Exception:
+        pass
+    return None, None
 
 # ---------------------------
 # Charging Station Lookup
@@ -203,7 +202,7 @@ def main():
         return
 
     st.sidebar.header("Navigation")
-    page = st.sidebar.radio("Go to", ["Welcome", "Range Estimator", "Charging Stations", "Logout"])
+    page = st.sidebar.radio("Go to", ["Welcome", "Range Estimator", "Charging Stations", "Chatbot", "Logout"])
 
     if page == "Welcome":
         st.title("Welcome to EV Smart Dashboard 🚗🔋")
@@ -254,6 +253,23 @@ def main():
                         count_str = f"{s['number_of_points']} point(s)" if s['number_of_points'] else "Unknown points"
                         st.markdown(f"{i}. **{s['name']}** — {s['distance']:.2f} km away — {count_str}")
 
+    elif page == "Chatbot":
+        st.title("💬 EV Assistant")
+        st.write("Ask me anything about electric vehicles.")
+        prompt = st.text_input("You:", key="chat_input")
+        groq_key = resolve_api_key("groq")
+        if not groq_key:
+            st.warning("Groq API key not configured; responses may be limited.")
+
+        if st.button("Send"):
+            if prompt:
+                try:
+                    response = chatbot_response(prompt, groq_key=groq_key)
+                except TypeError:
+                    # fallback if chatbot_response does not accept groq_key param
+                    response = chatbot_response(prompt)
+                st.markdown(f"**Bot:** {response}")
+
     elif page == "Logout":
         st.session_state.logged_in = False
         st.success("Logged out.")
@@ -261,6 +277,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
